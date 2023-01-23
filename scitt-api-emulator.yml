@@ -28,4 +28,3 @@ dependencies:
     - ecdsa==0.18.0
     - oscrypto==1.3.0
     - six==1.16.0
-prefix: /home/mprorock/conda/envs/scitt
