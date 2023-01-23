@@ -11,6 +11,13 @@ On Ubuntu, run the following to install Python:
 sudo apt install python3.8 python3.8-venv
 ```
 
+or, if you are running a conda environment, you can get things setup with the following:
+
+```sh
+conda env create -f scitt-api-emulator.yml
+conda activate scitt
+```
+
 ## Clone the emulator
 
 Clone the scitt-api-emulator repository and change into the scitt-api-emulator folder:
