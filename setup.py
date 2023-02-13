@@ -16,7 +16,7 @@ setup(
     install_requires=[
         "cryptography",
         "cbor2",
-        "cose",
+        "pycose",
         "httpx",
         "flask"
     ],
