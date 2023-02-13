@@ -43,6 +43,7 @@ def test_client_cli(tmp_path):
         {
             "tree_alg": "CCF",
             "workspace": workspace_path,
+            "error_rate": 0.1
         }
     ) as service:
         # create claim

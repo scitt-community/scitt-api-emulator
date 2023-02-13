@@ -4,11 +4,12 @@
 import os
 from pathlib import Path
 from io import BytesIO
+import random
 
 from flask import Flask, request, send_file, make_response
 
 from scitt_emulator.tree_algs import TREE_ALGS
-from scitt_emulator.scitt import EntryNotFoundError, ClaimInvalidError
+from scitt_emulator.scitt import EntryNotFoundError, ClaimInvalidError, OperationNotFoundError
 
 
 def make_error(code: str, msg: str, status_code: int):
@@ -23,12 +24,18 @@ def make_error(code: str, msg: str, status_code: int):
     )
 
 
+def make_unavailable_error():
+    return make_error("ServiceUnavailable", "Service unavailable, try again later", 503)
+
+
 def create_flask_app(config):
     app = Flask(__name__)
 
     # See http://flask.pocoo.org/docs/latest/config/
     app.config.update(dict(DEBUG=True))
     app.config.update(config)
+
+    error_rate = app.config["error_rate"]
 
     workspace_path = app.config["workspace"]
     storage_path = workspace_path / "storage"
@@ -43,29 +50,61 @@ def create_flask_app(config):
     app.scitt_service.initialize_service()
     print(f"Service parameters: {app.service_parameters_path}")
 
+    def is_unavailable():
+        return random.random() <= error_rate
+
+    @app.route("/entries/<string:entry_id>", methods=["GET"])
+    def get_entry(entry_id: str):
+        if is_unavailable():
+            return make_unavailable_error()
+        try:
+            entry = app.scitt_service.get_entry(entry_id)
+        except EntryNotFoundError as e:
+            return make_error("NotFound", str(e), 404)
+        return make_response(entry, 200)
+
     @app.route("/entries/<string:entry_id>/receipt", methods=["GET"])
     def get_receipt(entry_id: str):
+        if is_unavailable():
+            return make_unavailable_error()
         try:
             receipt = app.scitt_service.get_receipt(entry_id)
         except EntryNotFoundError as e:
-            return make_error("EntryNotFoundError", str(e), 404)
+            return make_error("NotFound", str(e), 404)
         return send_file(BytesIO(receipt), download_name=f"{entry_id}.receipt.cbor")
 
-    @app.route("/entries/<string:entry_id>", methods=["GET"])
+    @app.route("/entries/<string:entry_id>/claim", methods=["GET"])
     def get_claim(entry_id: str):
+        if is_unavailable():
+            return make_unavailable_error()
         try:
             claim = app.scitt_service.get_claim(entry_id)
         except EntryNotFoundError as e:
-            return make_error("EntryNotFoundError", str(e), 404)
+            return make_error("NotFound", str(e), 404)
         return send_file(BytesIO(claim), download_name=f"{entry_id}.cose")
 
     @app.route("/entries", methods=["POST"])
     def submit_claim():
+        if is_unavailable():
+            return make_unavailable_error()
         try:
-            entry_id = app.scitt_service.submit_claim(request.get_data())
+            operation = app.scitt_service.submit_claim(request.get_data())
         except ClaimInvalidError as e:
-            return make_error("ClaimInvalidError", str(e), 400)
-        return make_response({"entry_id": entry_id})
+            return make_error("InvalidInput", str(e), 400)
+        headers = {
+            "Location": f"{request.host_url}/operations/{operation['operationId']}"
+        }
+        return make_response(operation, 202, headers)
+
+    @app.route("/operations/<string:operation_id>", methods=["GET"])
+    def get_operation(operation_id: str):
+        if is_unavailable():
+            return make_unavailable_error()
+        try:
+            operation = app.scitt_service.get_operation(operation_id)
+        except OperationNotFoundError as e:
+            return make_error("NotFound", str(e), 404)
+        return make_response(operation)
 
     return app
 
@@ -73,6 +112,7 @@ def create_flask_app(config):
 def cli(fn):
     parser = fn()
     parser.add_argument("-p", "--port", type=int, default=8000)
+    parser.add_argument("--error-rate", type=float, default=0.01)
     parser.add_argument("--tree-alg", required=True, choices=list(TREE_ALGS.keys()))
     parser.add_argument("--workspace", type=Path, default=Path("workspace"))
 
@@ -81,6 +121,7 @@ def cli(fn):
             {
                 "tree_alg": args.tree_alg,
                 "workspace": args.workspace,
+                "error_rate": args.error_rate
             }
         )
         app.run(host="0.0.0.0", port=args.port)

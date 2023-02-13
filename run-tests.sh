@@ -14,4 +14,4 @@ else
     . ./venv/bin/activate 
 fi
 
-pytest
+pytest "$@"

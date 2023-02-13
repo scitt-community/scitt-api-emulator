@@ -4,6 +4,7 @@
 from typing import Optional
 from pathlib import Path
 import json
+import time
 
 import httpx
 
@@ -26,6 +27,39 @@ def raise_for_status(response: httpx.Response):
     )
 
 
+def raise_for_operation_status(operation: dict):
+    if operation["status"] != "failed":
+        return
+    raise RuntimeError(f"Operation error: {error['error']['message']}")
+
+
+class HttpClient:
+    CONNECT_RETRIES = 3
+    HTTP_RETRIES = 3
+    HTTP_DEFAULT_RETRY_DELAY = 1
+
+    def __init__(self):
+        transport = httpx.HTTPTransport(retries=self.CONNECT_RETRIES)
+        self.client = httpx.Client(transport=transport)
+    
+    def _request(self, *args, **kwargs):
+        response = self.client.request(*args, **kwargs)
+        retries = self.HTTP_RETRIES
+        while retries >= 0 and response.status_code == 503:
+            retries -= 1
+            retry_after = int(response.headers.get('retry-after', self.HTTP_DEFAULT_RETRY_DELAY))
+            time.sleep(retry_after)
+            response = self.client.request(*args, **kwargs)
+        raise_for_status(response)
+        return response
+
+    def get(self, *args, **kwargs):
+        return self._request("GET", *args, **kwargs)
+
+    def post(self, *args, **kwargs):
+        return self._request("POST", *args, **kwargs)
+
+
 def create_claim(issuer: str, content_type: str, payload: str, claim_path: Path):
     scitt.create_claim(claim_path, issuer, content_type, payload)
 
@@ -35,15 +69,24 @@ def submit_claim(
 ):
     with open(claim_path, "rb") as f:
         claim = f.read()
+    
+    client = HttpClient()
 
     # Submit claim
-    response = httpx.post(f"{url}/entries", content=claim)
-    raise_for_status(response)
-    entry_id = response.json()["entry_id"]
+    response = client.post(f"{url}/entries", content=claim)
+    operation = response.json()
+
+    # Wait for registration to finish
+    while operation["status"] != "registered":
+        time.sleep(1)
+        response = client.get(f"{url}/operations/{operation['operationId']}")
+        operation = response.json()
+        raise_for_operation_status(operation)
+    
+    entry_id = operation["entryId"]
 
     # Fetch receipt
-    response = httpx.get(f"{url}/entries/{entry_id}/receipt")
-    raise_for_status(response)
+    response = client.get(f"{url}/entries/{entry_id}/receipt")
     receipt = response.content
 
     print(f"Claim registered with entry ID {entry_id}")
@@ -63,8 +106,8 @@ def submit_claim(
 
 
 def retrieve_claim(url: str, entry_id: Path, claim_path: Path):
-    response = httpx.get(f"{url}/entries/{entry_id}")
-    raise_for_status(response)
+    client = HttpClient()
+    response = client.get(f"{url}/entries/{entry_id}/claim")
     claim = response.content
 
     with open(claim_path, "wb") as f:
@@ -74,8 +117,8 @@ def retrieve_claim(url: str, entry_id: Path, claim_path: Path):
 
 
 def retrieve_receipt(url: str, entry_id: Path, receipt_path: Path):
-    response = httpx.get(f"{url}/entries/{entry_id}/receipt")
-    raise_for_status(response)
+    client = HttpClient()
+    response = client.get(f"{url}/entries/{entry_id}/receipt")
     receipt = response.content
 
     with open(receipt_path, "wb") as f:
