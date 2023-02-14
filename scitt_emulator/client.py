@@ -30,7 +30,7 @@ def raise_for_status(response: httpx.Response):
 def raise_for_operation_status(operation: dict):
     if operation["status"] != "failed":
         return
-    raise RuntimeError(f"Operation error: {error['error']['message']}")
+    raise RuntimeError(f"Operation error: {operation['error']['message']}")
 
 
 class HttpClient:
@@ -38,16 +38,19 @@ class HttpClient:
     HTTP_RETRIES = 3
     HTTP_DEFAULT_RETRY_DELAY = 1
 
-    def __init__(self):
-        transport = httpx.HTTPTransport(retries=self.CONNECT_RETRIES)
+    def __init__(self, cacert: Optional[Path] = None):
+        verify = True if cacert is None else str(cacert)
+        transport = httpx.HTTPTransport(retries=self.CONNECT_RETRIES, verify=verify)
         self.client = httpx.Client(transport=transport)
-    
+
     def _request(self, *args, **kwargs):
         response = self.client.request(*args, **kwargs)
         retries = self.HTTP_RETRIES
         while retries >= 0 and response.status_code == 503:
             retries -= 1
-            retry_after = int(response.headers.get('retry-after', self.HTTP_DEFAULT_RETRY_DELAY))
+            retry_after = int(
+                response.headers.get("retry-after", self.HTTP_DEFAULT_RETRY_DELAY)
+            )
             time.sleep(retry_after)
             response = self.client.request(*args, **kwargs)
         raise_for_status(response)
@@ -65,12 +68,14 @@ def create_claim(issuer: str, content_type: str, payload: str, claim_path: Path)
 
 
 def submit_claim(
-    url: str, claim_path: Path, receipt_path: Path, entry_id_path: Optional[Path]
+    url: str,
+    claim_path: Path,
+    receipt_path: Path,
+    entry_id_path: Optional[Path],
+    client: HttpClient,
 ):
     with open(claim_path, "rb") as f:
         claim = f.read()
-    
-    client = HttpClient()
 
     # Submit claim
     response = client.post(f"{url}/entries", content=claim)
@@ -82,7 +87,7 @@ def submit_claim(
         response = client.get(f"{url}/operations/{operation['operationId']}")
         operation = response.json()
         raise_for_operation_status(operation)
-    
+
     entry_id = operation["entryId"]
 
     # Fetch receipt
@@ -105,8 +110,7 @@ def submit_claim(
         print(f"Entry ID written to {entry_id_path}")
 
 
-def retrieve_claim(url: str, entry_id: Path, claim_path: Path):
-    client = HttpClient()
+def retrieve_claim(url: str, entry_id: Path, claim_path: Path, client: HttpClient):
     response = client.get(f"{url}/entries/{entry_id}/claim")
     claim = response.content
 
@@ -116,8 +120,7 @@ def retrieve_claim(url: str, entry_id: Path, claim_path: Path):
     print(f"Claim written to {claim_path}")
 
 
-def retrieve_receipt(url: str, entry_id: Path, receipt_path: Path):
-    client = HttpClient()
+def retrieve_receipt(url: str, entry_id: Path, receipt_path: Path, client: HttpClient):
     response = client.get(f"{url}/entries/{entry_id}/receipt")
     receipt = response.content
 
@@ -166,9 +169,10 @@ def cli(fn):
         help="Path to write the entry id to",
     )
     p.add_argument("--url", required=False, default=DEFAULT_URL)
+    p.add_argument("--cacert", type=Path, help="CA certificate to verify host against")
     p.set_defaults(
         func=lambda args: submit_claim(
-            args.url, args.claim, args.out, args.out_entry_id
+            args.url, args.claim, args.out, args.out_entry_id, HttpClient(args.cacert)
         )
     )
 
@@ -176,7 +180,12 @@ def cli(fn):
     p.add_argument("--entry-id", required=True, type=str)
     p.add_argument("--out", required=True, type=Path, help="Path to write the claim to")
     p.add_argument("--url", required=False, default=DEFAULT_URL)
-    p.set_defaults(func=lambda args: retrieve_claim(args.url, args.entry_id, args.out))
+    p.add_argument("--cacert", type=Path, help="CA certificate to verify host against")
+    p.set_defaults(
+        func=lambda args: retrieve_claim(
+            args.url, args.entry_id, args.out, HttpClient(args.cacert)
+        )
+    )
 
     p = sub.add_parser("retrieve-receipt", description="Retrieve a SCITT receipt")
     p.add_argument("--entry-id", required=True, type=str)
@@ -184,8 +193,11 @@ def cli(fn):
         "--out", required=True, type=Path, help="Path to write the receipt to"
     )
     p.add_argument("--url", required=False, default=DEFAULT_URL)
+    p.add_argument("--cacert", type=Path, help="CA certificate to verify host against")
     p.set_defaults(
-        func=lambda args: retrieve_receipt(args.url, args.entry_id, args.out)
+        func=lambda args: retrieve_receipt(
+            args.url, args.entry_id, args.out, HttpClient(args.cacert)
+        )
     )
 
     p = sub.add_parser("verify-receipt", description="Verify a SCITT receipt")
