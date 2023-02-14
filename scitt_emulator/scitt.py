@@ -7,7 +7,6 @@ from pathlib import Path
 import time
 import json
 import uuid
-import random
 
 import cbor2
 from cose.messages import CoseMessage, Sign1Message
@@ -141,6 +140,10 @@ class SCITTServiceEmulator(ABC):
 
         operation["status"] = "registered"
         operation["entryId"] = entry_id
+
+        with open(operation_path, "w") as f:
+            json.dump(operation, f)
+
         return operation
 
     def _create_receipt(self, claim: bytes, entry_id: str):
