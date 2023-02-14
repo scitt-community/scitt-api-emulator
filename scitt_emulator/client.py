@@ -12,7 +12,9 @@ import scitt_emulator.scitt as scitt
 from scitt_emulator.tree_algs import TREE_ALGS
 
 DEFAULT_URL = "http://127.0.0.1:8000"
-
+CONNECT_RETRIES = 3
+HTTP_RETRIES = 3
+HTTP_DEFAULT_RETRY_DELAY = 1
 
 def raise_for_status(response: httpx.Response):
     if response.is_success:
@@ -34,22 +36,18 @@ def raise_for_operation_status(operation: dict):
 
 
 class HttpClient:
-    CONNECT_RETRIES = 3
-    HTTP_RETRIES = 3
-    HTTP_DEFAULT_RETRY_DELAY = 1
-
     def __init__(self, cacert: Optional[Path] = None):
         verify = True if cacert is None else str(cacert)
-        transport = httpx.HTTPTransport(retries=self.CONNECT_RETRIES, verify=verify)
+        transport = httpx.HTTPTransport(retries=CONNECT_RETRIES, verify=verify)
         self.client = httpx.Client(transport=transport)
 
     def _request(self, *args, **kwargs):
         response = self.client.request(*args, **kwargs)
-        retries = self.HTTP_RETRIES
+        retries = HTTP_RETRIES
         while retries >= 0 and response.status_code == 503:
             retries -= 1
             retry_after = int(
-                response.headers.get("retry-after", self.HTTP_DEFAULT_RETRY_DELAY)
+                response.headers.get("retry-after", HTTP_DEFAULT_RETRY_DELAY)
             )
             time.sleep(retry_after)
             response = self.client.request(*args, **kwargs)
@@ -83,7 +81,10 @@ def submit_claim(
 
     # Wait for registration to finish
     while operation["status"] != "registered":
-        time.sleep(1)
+        retry_after = int(
+            response.headers.get("retry-after", HTTP_DEFAULT_RETRY_DELAY)
+        )
+        time.sleep(retry_after)
         response = client.get(f"{url}/operations/{operation['operationId']}")
         operation = response.json()
         raise_for_operation_status(operation)

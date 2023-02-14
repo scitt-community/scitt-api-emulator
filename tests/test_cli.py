@@ -21,7 +21,10 @@ class Service:
     def __enter__(self):
         app = server.create_flask_app(self.config)
         self.service_parameters_path = app.service_parameters_path
-        self.server = make_server("127.0.0.1", 8000, app)
+        host = "127.0.0.1"
+        self.server = make_server(host, 0, app)
+        port = self.server.port
+        self.url = f"http://{host}:{port}"
         self.thread = threading.Thread(name="server", target=self.server.serve_forever)
         self.thread.start()
         return self
@@ -72,6 +75,8 @@ def test_client_cli(tmp_path):
             receipt_path,
             "--out-entry-id",
             entry_id_path,
+            "--url",
+            service.url
         ]
         execute_cli(command)
         assert os.path.exists(receipt_path)
@@ -101,6 +106,8 @@ def test_client_cli(tmp_path):
             entry_id,
             "--out",
             retrieved_claim_path,
+            "--url",
+            service.url
         ]
         execute_cli(command)
         assert os.path.exists(retrieved_claim_path)
@@ -120,6 +127,8 @@ def test_client_cli(tmp_path):
             entry_id,
             "--out",
             receipt_path_2,
+            "--url",
+            service.url
         ]
         execute_cli(command)
         assert os.path.exists(receipt_path_2)
