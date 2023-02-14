@@ -94,6 +94,8 @@ def create_flask_app(config):
         headers = {
             "Location": f"{request.host_url}/operations/{operation['operationId']}"
         }
+        if operation["status"] == "pending":
+            headers["Retry-After"] = "1"
         return make_response(operation, 202, headers)
 
     @app.route("/operations/<string:operation_id>", methods=["GET"])
@@ -104,7 +106,10 @@ def create_flask_app(config):
             operation = app.scitt_service.get_operation(operation_id)
         except OperationNotFoundError as e:
             return make_error("NotFound", str(e), 404)
-        return make_response(operation)
+        headers = {}
+        if operation["status"] == "pending":
+            headers["Retry-After"] = "1"
+        return make_response(operation, 200, headers)
 
     return app
 
