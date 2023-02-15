@@ -19,20 +19,13 @@ HTTP_DEFAULT_RETRY_DELAY = 1
 def raise_for_status(response: httpx.Response):
     if response.is_success:
         return
-    try:
-        error = response.json()
-    except json.JSONDecodeError:
-        error = response.text
-        raise RuntimeError(f"HTTP error {response.status_code}: {error}")
-    raise RuntimeError(
-        f"HTTP error {response.status_code}: {error['error']['message']}"
-    )
+    raise RuntimeError(f"HTTP error {response.status_code}: {response.text}")
 
 
 def raise_for_operation_status(operation: dict):
     if operation["status"] != "failed":
         return
-    raise RuntimeError(f"Operation error: {operation['error']['message']}")
+    raise RuntimeError(f"Operation error: {operation['error']}")
 
 
 class HttpClient:
@@ -77,19 +70,25 @@ def submit_claim(
 
     # Submit claim
     response = client.post(f"{url}/entries", content=claim)
-    operation = response.json()
-
-    # Wait for registration to finish
-    while operation["status"] != "succeeded":
-        retry_after = int(
-            response.headers.get("retry-after", HTTP_DEFAULT_RETRY_DELAY)
-        )
-        time.sleep(retry_after)
-        response = client.get(f"{url}/operations/{operation['operationId']}")
+    if response.status_code == 201:
+        entry = response.json()
+        entry_id = entry["entryId"]
+    elif response.status_code == 202:
         operation = response.json()
-        raise_for_operation_status(operation)
 
-    entry_id = operation["entryId"]
+        # Wait for registration to finish
+        while operation["status"] != "succeeded":
+            retry_after = int(
+                response.headers.get("retry-after", HTTP_DEFAULT_RETRY_DELAY)
+            )
+            time.sleep(retry_after)
+            response = client.get(f"{url}/operations/{operation['operationId']}")
+            operation = response.json()
+            raise_for_operation_status(operation)
+
+        entry_id = operation["entryId"]
+    else:
+        raise RuntimeError(f"Unexpected status code: {response.status_code}")
 
     # Fetch receipt
     response = client.get(f"{url}/entries/{entry_id}/receipt")
