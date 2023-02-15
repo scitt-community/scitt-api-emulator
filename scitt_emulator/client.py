@@ -80,7 +80,7 @@ def submit_claim(
     operation = response.json()
 
     # Wait for registration to finish
-    while operation["status"] != "registered":
+    while operation["status"] != "succeeded":
         retry_after = int(
             response.headers.get("retry-after", HTTP_DEFAULT_RETRY_DELAY)
         )

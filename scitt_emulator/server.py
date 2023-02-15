@@ -15,17 +15,15 @@ from scitt_emulator.scitt import EntryNotFoundError, ClaimInvalidError, Operatio
 def make_error(code: str, msg: str, status_code: int):
     return make_response(
         {
-            "error": {
-                "code": code,
-                "message": msg,
-            }
+            "type": f"urn:ietf:params:scitt:error:{code}",
+            "detail": msg,
         },
         status_code,
     )
 
 
 def make_unavailable_error():
-    return make_error("ServiceUnavailable", "Service unavailable, try again later", 503)
+    return make_error("serviceUnavailable", "Service unavailable, try again later", 503)
 
 
 def create_flask_app(config):
@@ -60,7 +58,7 @@ def create_flask_app(config):
         try:
             entry = app.scitt_service.get_entry(entry_id)
         except EntryNotFoundError as e:
-            return make_error("NotFound", str(e), 404)
+            return make_error("entryNotFound", str(e), 404)
         return make_response(entry, 200)
 
     @app.route("/entries/<string:entry_id>/receipt", methods=["GET"])
@@ -70,7 +68,7 @@ def create_flask_app(config):
         try:
             receipt = app.scitt_service.get_receipt(entry_id)
         except EntryNotFoundError as e:
-            return make_error("NotFound", str(e), 404)
+            return make_error("entryNotFound", str(e), 404)
         return send_file(BytesIO(receipt), download_name=f"{entry_id}.receipt.cbor")
 
     @app.route("/entries/<string:entry_id>/claim", methods=["GET"])
@@ -80,7 +78,7 @@ def create_flask_app(config):
         try:
             claim = app.scitt_service.get_claim(entry_id)
         except EntryNotFoundError as e:
-            return make_error("NotFound", str(e), 404)
+            return make_error("entryNotFound", str(e), 404)
         return send_file(BytesIO(claim), download_name=f"{entry_id}.cose")
 
     @app.route("/entries", methods=["POST"])
@@ -90,7 +88,7 @@ def create_flask_app(config):
         try:
             operation = app.scitt_service.submit_claim(request.get_data())
         except ClaimInvalidError as e:
-            return make_error("InvalidInput", str(e), 400)
+            return make_error("invalidInput", str(e), 400)
         headers = {
             "Location": f"{request.host_url}/operations/{operation['operationId']}"
         }
@@ -105,7 +103,7 @@ def create_flask_app(config):
         try:
             operation = app.scitt_service.get_operation(operation_id)
         except OperationNotFoundError as e:
-            return make_error("NotFound", str(e), 404)
+            return make_error("operationNotFound", str(e), 404)
         headers = {}
         if operation["status"] == "pending":
             headers["Retry-After"] = "1"

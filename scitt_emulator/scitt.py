@@ -138,7 +138,7 @@ class SCITTServiceEmulator(ABC):
 
         last_entry_path.write_text(entry_id)
 
-        operation["status"] = "registered"
+        operation["status"] = "succeeded"
         operation["entryId"] = entry_id
 
         with open(operation_path, "w") as f:
