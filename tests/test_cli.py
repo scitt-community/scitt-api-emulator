@@ -2,6 +2,7 @@
 # Licensed under the MIT License.
 import os
 import threading
+import pytest
 from werkzeug.serving import make_server
 from scitt_emulator import cli, server
 
@@ -33,8 +34,10 @@ class Service:
         self.server.shutdown()
         self.thread.join()
 
-
-def test_client_cli(tmp_path):
+@pytest.mark.parametrize(
+    "use_lro", [True, False],
+)
+def test_client_cli(use_lro: bool, tmp_path):
     workspace_path = tmp_path / "workspace"
 
     claim_path = tmp_path / "claim.cose"
@@ -46,7 +49,8 @@ def test_client_cli(tmp_path):
         {
             "tree_alg": "CCF",
             "workspace": workspace_path,
-            "error_rate": 0.1
+            "error_rate": 0.1,
+            "use_lro": use_lro
         }
     ) as service:
         # create claim

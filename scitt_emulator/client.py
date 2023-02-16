@@ -16,6 +16,7 @@ CONNECT_RETRIES = 3
 HTTP_RETRIES = 3
 HTTP_DEFAULT_RETRY_DELAY = 1
 
+
 def raise_for_status(response: httpx.Response):
     if response.is_success:
         return
@@ -73,6 +74,7 @@ def submit_claim(
     if response.status_code == 201:
         entry = response.json()
         entry_id = entry["entryId"]
+
     elif response.status_code == 202:
         operation = response.json()
 
@@ -87,6 +89,7 @@ def submit_claim(
             raise_for_operation_status(operation)
 
         entry_id = operation["entryId"]
+
     else:
         raise RuntimeError(f"Unexpected status code: {response.status_code}")
 

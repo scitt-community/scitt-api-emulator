@@ -34,6 +34,7 @@ def create_flask_app(config):
     app.config.update(config)
 
     error_rate = app.config["error_rate"]
+    use_lro = app.config["use_lro"]
 
     workspace_path = app.config["workspace"]
     storage_path = workspace_path / "storage"
@@ -86,15 +87,22 @@ def create_flask_app(config):
         if is_unavailable():
             return make_unavailable_error()
         try:
-            operation = app.scitt_service.submit_claim(request.get_data())
+            if use_lro:
+                result = app.scitt_service.submit_claim(request.get_data(), long_running=True)
+                headers = {
+                    "Location": f"{request.host_url}/operations/{result['operationId']}",
+                    "Retry-After": "1"
+                }
+                status_code = 202
+            else:
+                result = app.scitt_service.submit_claim(request.get_data(), long_running=False)
+                headers = {
+                    "Location": f"{request.host_url}/entries/{result['entryId']}",
+                }
+                status_code = 201
         except ClaimInvalidError as e:
             return make_error("invalidInput", str(e), 400)
-        headers = {
-            "Location": f"{request.host_url}/operations/{operation['operationId']}"
-        }
-        if operation["status"] == "pending":
-            headers["Retry-After"] = "1"
-        return make_response(operation, 202, headers)
+        return make_response(result, status_code, headers)
 
     @app.route("/operations/<string:operation_id>", methods=["GET"])
     def get_operation(operation_id: str):
@@ -116,6 +124,7 @@ def cli(fn):
     parser = fn()
     parser.add_argument("-p", "--port", type=int, default=8000)
     parser.add_argument("--error-rate", type=float, default=0.01)
+    parser.add_argument("--use-lro", action="store_true", help="Create operations for submissions")
     parser.add_argument("--tree-alg", required=True, choices=list(TREE_ALGS.keys()))
     parser.add_argument("--workspace", type=Path, default=Path("workspace"))
 
@@ -124,7 +133,8 @@ def cli(fn):
             {
                 "tree_alg": args.tree_alg,
                 "workspace": args.workspace,
-                "error_rate": args.error_rate
+                "error_rate": args.error_rate,
+                "use_lro": args.use_lro
             }
         )
         app.run(host="0.0.0.0", port=args.port)
