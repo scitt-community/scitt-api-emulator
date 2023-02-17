@@ -38,4 +38,4 @@ jobs:
       with:
         activate-environment: scitt
         environment-file: environment.yml
-    - run: pytest
+    - run: python -m pytest
