@@ -11,8 +11,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  ci:
-    name: CI
+  ci-venv:
+    name: CI (venv)
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -24,4 +24,14 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
     - run: ./run-tests.sh
-
+  
+  ci-conda:
+    name: CI (conda)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: conda-incubator/setup-miniconda@v2
+      with:
+        activate-environment: scitt
+        environment-file: environment.yml
+    - run: pytest
