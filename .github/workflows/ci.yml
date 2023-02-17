@@ -28,6 +28,10 @@ jobs:
   ci-conda:
     name: CI (conda)
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        # https://github.com/conda-incubator/setup-miniconda#use-a-default-shell
+        shell: bash -el {0}
     steps:
     - uses: actions/checkout@v3
     - uses: conda-incubator/setup-miniconda@v2
