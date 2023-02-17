@@ -1,0 +1,22 @@
+name: CI
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+  pull_request:
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch:
+
+jobs:
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+    - uses: actions/checkout@v3
+    - uses: conda-incubator/setup-miniconda@v2
+      with:
+        activate-environment: scitt
+        environment-file: scitt-api-emulator.yml
+    - run: ./run-tests.sh
