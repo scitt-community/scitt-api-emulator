@@ -70,7 +70,7 @@ class SCITTServiceEmulator(ABC):
         except FileNotFoundError:
             raise EntryNotFoundError(f"Operation {operation_id} not found")
         
-        if operation["status"] == "pending":
+        if operation["status"] == "running":
             # Pretend that the service finishes the operation after
             # the client having checked the operation status once.
             operation = self._finish_operation(operation)
@@ -128,7 +128,7 @@ class SCITTServiceEmulator(ABC):
 
         operation = {
             "operationId": operation_id,
-            "status": "pending"
+            "status": "running"
         }
 
         with open(operation_path, "w") as f:

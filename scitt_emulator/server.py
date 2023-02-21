@@ -113,7 +113,7 @@ def create_flask_app(config):
         except OperationNotFoundError as e:
             return make_error("operationNotFound", str(e), 404)
         headers = {}
-        if operation["status"] == "pending":
+        if operation["status"] == "running":
             headers["Retry-After"] = "1"
         return make_response(operation, 200, headers)
 
