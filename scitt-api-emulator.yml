@@ -24,7 +24,7 @@ dependencies:
     - asn1crypto==1.5.1
     - cbor2==5.4.6
     - certvalidator==0.11.1
-    - cose==0.9.dev8
+    - pycose==1.0.1
     - ecdsa==0.18.0
     - oscrypto==1.3.0
     - six==1.16.0
