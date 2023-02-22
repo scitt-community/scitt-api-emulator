@@ -9,10 +9,10 @@ import json
 import uuid
 
 import cbor2
-from cose.messages import CoseMessage, Sign1Message
-import cose.headers
-from cose.keys.ec2 import EC2Key
-import cose.keys.curves
+from pycose.messages import CoseMessage, Sign1Message
+import pycose.headers
+from pycose.keys.ec2 import EC2Key
+import pycose.keys.curves
 
 # temporary claim header labels, see draft-birkholz-scitt-architecture
 COSE_Headers_Issuer = 391
@@ -169,9 +169,9 @@ class SCITTServiceEmulator(ABC):
             raise ClaimInvalidError("Claim is not a valid COSE message")
         if not isinstance(msg, Sign1Message):
             raise ClaimInvalidError("Claim is not a COSE_Sign1 message")
-        if cose.headers.Algorithm not in msg.phdr:
+        if pycose.headers.Algorithm not in msg.phdr:
             raise ClaimInvalidError("Claim does not have an algorithm header parameter")
-        if cose.headers.ContentType not in msg.phdr:
+        if pycose.headers.ContentType not in msg.phdr:
             raise ClaimInvalidError(
                 "Claim does not have a content type header parameter"
             )
@@ -246,15 +246,15 @@ class SCITTServiceEmulator(ABC):
 def create_claim(claim_path: Path, issuer: str, content_type: str, payload: str):
     # Create COSE_Sign1 structure
     protected = {
-        cose.headers.Algorithm: "ES256",
-        cose.headers.ContentType: content_type,
+        pycose.headers.Algorithm: "ES256",
+        pycose.headers.ContentType: content_type,
         COSE_Headers_Issuer: issuer,
     }
     msg = Sign1Message(phdr=protected, payload=payload.encode("utf-8"))
 
     # Create an ad-hoc key
     # Note: The emulator does not validate signatures, hence the short-cut.
-    key = EC2Key.generate_key(cose.keys.curves.P256)
+    key = EC2Key.generate_key(pycose.keys.curves.P256)
 
     # Sign
     msg.key = key
