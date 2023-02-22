@@ -114,7 +114,7 @@ def submit_claim(
 
 
 def retrieve_claim(url: str, entry_id: Path, claim_path: Path, client: HttpClient):
-    response = client.get(f"{url}/entries/{entry_id}/claim")
+    response = client.get(f"{url}/entries/{entry_id}")
     claim = response.content
 
     with open(claim_path, "wb") as f:

@@ -52,16 +52,6 @@ def create_flask_app(config):
     def is_unavailable():
         return random.random() <= error_rate
 
-    @app.route("/entries/<string:entry_id>", methods=["GET"])
-    def get_entry(entry_id: str):
-        if is_unavailable():
-            return make_unavailable_error()
-        try:
-            entry = app.scitt_service.get_entry(entry_id)
-        except EntryNotFoundError as e:
-            return make_error("entryNotFound", str(e), 404)
-        return make_response(entry, 200)
-
     @app.route("/entries/<string:entry_id>/receipt", methods=["GET"])
     def get_receipt(entry_id: str):
         if is_unavailable():
@@ -72,7 +62,7 @@ def create_flask_app(config):
             return make_error("entryNotFound", str(e), 404)
         return send_file(BytesIO(receipt), download_name=f"{entry_id}.receipt.cbor")
 
-    @app.route("/entries/<string:entry_id>/claim", methods=["GET"])
+    @app.route("/entries/<string:entry_id>", methods=["GET"])
     def get_claim(entry_id: str):
         if is_unavailable():
             return make_unavailable_error()
