@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 import time
 import json
+import uuid
 
 import cbor2
 from pycose.messages import CoseMessage, Sign1Message
@@ -30,12 +31,20 @@ class EntryNotFoundError(Exception):
     pass
 
 
+class OperationNotFoundError(Exception):
+    pass
+
+
 class SCITTServiceEmulator(ABC):
     def __init__(
         self, service_parameters_path: Path, storage_path: Optional[Path] = None
     ):
         self.storage_path = storage_path
         self.service_parameters_path = service_parameters_path
+
+        if storage_path is not None:
+            self.operations_path = storage_path / "operations"
+            self.operations_path.mkdir(exist_ok=True)
 
         if self.service_parameters_path.exists():
             with open(self.service_parameters_path) as f:
@@ -53,6 +62,28 @@ class SCITTServiceEmulator(ABC):
     def verify_receipt_contents(receipt_contents: list, countersign_tbi: bytes):
         raise NotImplementedError
 
+    def get_operation(self, operation_id: str) -> dict:
+        operation_path = self.operations_path / f"{operation_id}.json"
+        try:
+            with open(operation_path, "r") as f:
+                operation = json.load(f)
+        except FileNotFoundError:
+            raise EntryNotFoundError(f"Operation {operation_id} not found")
+        
+        if operation["status"] == "running":
+            # Pretend that the service finishes the operation after
+            # the client having checked the operation status once.
+            operation = self._finish_operation(operation)
+        return operation
+
+    def get_entry(self, entry_id: str) -> dict:
+        try:
+            self.get_claim(entry_id)
+        except EntryNotFoundError:
+            raise
+        # More metadata to follow in the future.
+        return { "entryId": entry_id }
+
     def get_claim(self, entry_id: str) -> bytes:
         claim_path = self.storage_path / f"{entry_id}.cose"
         try:
@@ -62,7 +93,13 @@ class SCITTServiceEmulator(ABC):
             raise EntryNotFoundError(f"Entry {entry_id} not found")
         return claim
 
-    def submit_claim(self, claim: bytes):
+    def submit_claim(self, claim: bytes, long_running=True) -> dict:
+        if long_running:
+            return self._create_operation(claim)
+        else:
+            return self._create_entry(claim)
+
+    def _create_entry(self, claim: bytes) -> dict:
         last_entry_path = self.storage_path / "last_entry_id.txt"
         if last_entry_path.exists():
             with open(last_entry_path, "r") as f:
@@ -70,21 +107,59 @@ class SCITTServiceEmulator(ABC):
         else:
             last_entry_id = 0
 
-        entry_id = last_entry_id + 1
+        entry_id = str(last_entry_id + 1)
 
         self._create_receipt(claim, entry_id)
 
+        last_entry_path.write_text(entry_id)
+
         claim_path = self.storage_path / f"{entry_id}.cose"
-        with open(claim_path, "wb") as f:
-            f.write(claim)
+        claim_path.write_bytes(claim)
+
         print(f"Claim written to {claim_path}")
 
-        with open(last_entry_path, "w") as f:
-            f.write(str(entry_id))
+        entry = {"entryId": entry_id}
+        return entry
+    
+    def _create_operation(self, claim: bytes):
+        operation_id = str(uuid.uuid4())
+        operation_path = self.operations_path / f"{operation_id}.json"
+        claim_path = self.operations_path / f"{operation_id}.cose"
 
-        return entry_id
+        operation = {
+            "operationId": operation_id,
+            "status": "running"
+        }
 
-    def _create_receipt(self, claim: Path, entry_id: str):
+        with open(operation_path, "w") as f:
+            json.dump(operation, f)
+        
+        with open(claim_path, "wb") as f:
+            f.write(claim)
+        
+        print(f"Operation {operation_id} created")
+        print(f"Claim written to {claim_path}")
+
+        return operation
+
+    def _finish_operation(self, operation: dict):
+        operation_id = operation["operationId"]
+        operation_path = self.operations_path / f"{operation_id}.json"
+        claim_src_path = self.operations_path / f"{operation_id}.cose"
+
+        claim = claim_src_path.read_bytes()
+        entry = self._create_entry(claim)
+        claim_src_path.unlink()
+
+        operation["status"] = "succeeded"
+        operation["entryId"] = entry["entryId"]
+
+        with open(operation_path, "w") as f:
+            json.dump(operation, f)
+
+        return operation
+
+    def _create_receipt(self, claim: bytes, entry_id: str):
         # Validate claim
         # Note: This emulator does not verify the claim signature and does not apply
         # registration policies.

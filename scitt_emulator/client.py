@@ -4,6 +4,7 @@
 from typing import Optional
 from pathlib import Path
 import json
+import time
 
 import httpx
 
@@ -11,19 +12,47 @@ import scitt_emulator.scitt as scitt
 from scitt_emulator.tree_algs import TREE_ALGS
 
 DEFAULT_URL = "http://127.0.0.1:8000"
+CONNECT_RETRIES = 3
+HTTP_RETRIES = 3
+HTTP_DEFAULT_RETRY_DELAY = 1
 
 
 def raise_for_status(response: httpx.Response):
     if response.is_success:
         return
-    try:
-        error = response.json()
-    except json.JSONDecodeError:
-        error = response.text
-        raise RuntimeError(f"HTTP error {response.status_code}: {error}")
-    raise RuntimeError(
-        f"HTTP error {response.status_code}: {error['error']['message']}"
-    )
+    raise RuntimeError(f"HTTP error {response.status_code}: {response.text}")
+
+
+def raise_for_operation_status(operation: dict):
+    if operation["status"] != "failed":
+        return
+    raise RuntimeError(f"Operation error: {operation['error']}")
+
+
+class HttpClient:
+    def __init__(self, cacert: Optional[Path] = None):
+        verify = True if cacert is None else str(cacert)
+        transport = httpx.HTTPTransport(retries=CONNECT_RETRIES, verify=verify)
+        self.client = httpx.Client(transport=transport)
+
+    def _request(self, *args, **kwargs):
+        response = self.client.request(*args, **kwargs)
+        retries = HTTP_RETRIES
+        while retries >= 0 and response.status_code == 503:
+            retries -= 1
+            retry_after = int(
+                response.headers.get("retry-after", HTTP_DEFAULT_RETRY_DELAY)
+            )
+            time.sleep(retry_after)
+            response = self.client.request(*args, **kwargs)
+        raise_for_status(response)
+        return response
+
+    def get(self, *args, **kwargs):
+        return self._request("GET", *args, **kwargs)
+
+    def post(self, *args, **kwargs):
+        return self._request("POST", *args, **kwargs)
 
 
 def create_claim(issuer: str, content_type: str, payload: str, claim_path: Path):
@@ -31,19 +60,41 @@ def create_claim(issuer: str, content_type: str, payload: str, claim_path: Path)
 
 
 def submit_claim(
-    url: str, claim_path: Path, receipt_path: Path, entry_id_path: Optional[Path]
+    url: str,
+    claim_path: Path,
+    receipt_path: Path,
+    entry_id_path: Optional[Path],
+    client: HttpClient,
 ):
     with open(claim_path, "rb") as f:
         claim = f.read()
 
     # Submit claim
-    response = httpx.post(f"{url}/entries", content=claim)
-    raise_for_status(response)
-    entry_id = response.json()["entry_id"]
+    response = client.post(f"{url}/entries", content=claim)
+    if response.status_code == 201:
+        entry = response.json()
+        entry_id = entry["entryId"]
+
+    elif response.status_code == 202:
+        operation = response.json()
+
+        # Wait for registration to finish
+        while operation["status"] != "succeeded":
+            retry_after = int(
+                response.headers.get("retry-after", HTTP_DEFAULT_RETRY_DELAY)
+            )
+            time.sleep(retry_after)
+            response = client.get(f"{url}/operations/{operation['operationId']}")
+            operation = response.json()
+            raise_for_operation_status(operation)
+
+        entry_id = operation["entryId"]
+
+    else:
+        raise RuntimeError(f"Unexpected status code: {response.status_code}")
 
     # Fetch receipt
-    response = httpx.get(f"{url}/entries/{entry_id}/receipt")
-    raise_for_status(response)
+    response = client.get(f"{url}/entries/{entry_id}/receipt")
     receipt = response.content
 
     print(f"Claim registered with entry ID {entry_id}")
@@ -62,9 +113,8 @@ def submit_claim(
         print(f"Entry ID written to {entry_id_path}")
 
 
-def retrieve_claim(url: str, entry_id: Path, claim_path: Path):
-    response = httpx.get(f"{url}/entries/{entry_id}")
-    raise_for_status(response)
+def retrieve_claim(url: str, entry_id: Path, claim_path: Path, client: HttpClient):
+    response = client.get(f"{url}/entries/{entry_id}")
     claim = response.content
 
     with open(claim_path, "wb") as f:
@@ -73,9 +123,8 @@ def retrieve_claim(url: str, entry_id: Path, claim_path: Path):
     print(f"Claim written to {claim_path}")
 
 
-def retrieve_receipt(url: str, entry_id: Path, receipt_path: Path):
-    response = httpx.get(f"{url}/entries/{entry_id}/receipt")
-    raise_for_status(response)
+def retrieve_receipt(url: str, entry_id: Path, receipt_path: Path, client: HttpClient):
+    response = client.get(f"{url}/entries/{entry_id}/receipt")
     receipt = response.content
 
     with open(receipt_path, "wb") as f:
@@ -123,9 +172,10 @@ def cli(fn):
         help="Path to write the entry id to",
     )
     p.add_argument("--url", required=False, default=DEFAULT_URL)
+    p.add_argument("--cacert", type=Path, help="CA certificate to verify host against")
     p.set_defaults(
         func=lambda args: submit_claim(
-            args.url, args.claim, args.out, args.out_entry_id
+            args.url, args.claim, args.out, args.out_entry_id, HttpClient(args.cacert)
         )
     )
 
@@ -133,7 +183,12 @@ def cli(fn):
     p.add_argument("--entry-id", required=True, type=str)
     p.add_argument("--out", required=True, type=Path, help="Path to write the claim to")
     p.add_argument("--url", required=False, default=DEFAULT_URL)
-    p.set_defaults(func=lambda args: retrieve_claim(args.url, args.entry_id, args.out))
+    p.add_argument("--cacert", type=Path, help="CA certificate to verify host against")
+    p.set_defaults(
+        func=lambda args: retrieve_claim(
+            args.url, args.entry_id, args.out, HttpClient(args.cacert)
+        )
+    )
 
     p = sub.add_parser("retrieve-receipt", description="Retrieve a SCITT receipt")
     p.add_argument("--entry-id", required=True, type=str)
@@ -141,8 +196,11 @@ def cli(fn):
         "--out", required=True, type=Path, help="Path to write the receipt to"
     )
     p.add_argument("--url", required=False, default=DEFAULT_URL)
+    p.add_argument("--cacert", type=Path, help="CA certificate to verify host against")
     p.set_defaults(
-        func=lambda args: retrieve_receipt(args.url, args.entry_id, args.out)
+        func=lambda args: retrieve_receipt(
+            args.url, args.entry_id, args.out, HttpClient(args.cacert)
+        )
     )
 
     p = sub.add_parser("verify-receipt", description="Verify a SCITT receipt")
