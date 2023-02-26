@@ -23,7 +23,16 @@ conda activate scitt
 Clone the scitt-api-emulator repository and change into the scitt-api-emulator folder:
 
 ```sh
-git clone https://github.com/microsoft/scitt-api-emulator
+git clone https://github.com/scitt-community/scitt-api-emulator.git
+```
+or for ssh:
+
+```sh
+git clone git@github.com:scitt-community/scitt-api-emulator.git
+```
+then:
+
+```sh
 cd scitt-api-emulator
 ```
 
