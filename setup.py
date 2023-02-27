@@ -18,6 +18,7 @@ setup(
         "cbor2",
         "pycose",
         "httpx",
-        "flask"
+        "flask",
+        "rkvst-archivist"
     ],
 )

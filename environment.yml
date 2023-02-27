@@ -18,6 +18,7 @@ dependencies:
   - pytest=7.2.1
   - python=3.8.16
   - rfc3986=1.5.0
+  - rkvst-archivist=0.20.0
   - setuptools=66.1.1
   - wheel=0.38.4
   - pip:
