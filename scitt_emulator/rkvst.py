@@ -50,19 +50,19 @@ class RKVSTSCITTServiceEmulator(SCITTServiceEmulator):
 
     def create_receipt_contents(self, countersign_tbi: bytes, entry_id: str):
         # TODO: We don't have the receipt API yet so just make any call to RKVST
-        #       and make sure it works consistently. Set RKVST_SCITT_ASSET_ID to
+        #       and make sure it works consistently. Set RKVST_SCITT_EVENT_ID to
         #       the asset identity of any 'document' profile asset that is readable
         #       by the app registration you're using
-        asset_id = getenv("RKVST_SCITT_ASSET_ID")
-        test = self.rkvst_connection.assets.read(asset_id)
+        event_id = getenv("RKVST_SCITT_EVENT_ID")
+        test = self.rkvst_connection.events.read(event_id)
 
         # TODO: Make sure we return the right shape structure according to the superclass:
         #     leaf_info = [internal_hash, internal_data]
         #     receipt_contents = [signature, node_cert_der, proof, leaf_info]
 
         leaf_info = [
-            test['attributes']['document_hash_value'],
-            test['attributes']['arc_description']
+            test['asset_attributes']['document_hash_value'],
+            test['event_attributes']['arc_description']
         ]
         receipt_contents = [
             "deadbeef",
@@ -79,21 +79,21 @@ class RKVSTSCITTServiceEmulator(SCITTServiceEmulator):
 
         # Get RKVST to verify the receipts
         # TODO: we don't have the receipt API yet so just verify the Asset record
-        #       and make sure it works consistently. Set RKVST_SCITT_ASSE_IDE to
+        #       and make sure it works consistently. Set RKVST_SCITT_EVENT_IDE to
         #       the asset identity of any 'document' profile asset that is readable
         #       by the app registration you're using
-        asset_id = getenv("RKVST_SCITT_ASSET_ID")
-        test = self.rkvst_connection.assets.read(asset_id)
+        event_id = getenv("RKVST_SCITT_EVENT_ID")
+        test = self.rkvst_connection.events.read(event_id)
         
-        if inernalhash != test['attributes']['document_hash_value']:
-            print(f"InternalHash error: ${inernalhash} is not ${test['attributes']['image_hash_sha256']}")
+        if inernalhash != test['asset_attributes']['document_hash_value']:
+            print(f"InternalHash error: ${inernalhash} is not ${test['asset_attributes']['document_hash_value']}")
             raise Exception(
-                "Receipt hash doesn't match Asset hash"
+                "Receipt hash doesn't match Event hash"
             )
 
         if internal_data != test['attributes']['arc_description']:
-            print(f"InternalData error: ${internal_data} is not ${test['attributes']['arc_description']}")
+            print(f"InternalData error: ${internal_data} is not ${test['event_attributes']['arc_description']}")
             raise Exception(
-                "Receipt data doesn't match Asset description"
+                "Receipt data doesn't match Event description"
             )
 
