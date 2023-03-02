@@ -30,10 +30,13 @@ def raise_for_operation_status(operation: dict):
 
 
 class HttpClient:
-    def __init__(self, cacert: Optional[Path] = None):
+    def __init__(self, bearer_token: Optional[str] = None, cacert: Optional[Path] = None):
+        headers = {}
+        if bearer_token is not None:
+            headers["Authorization"] = f"Bearer {bearer_token}"
         verify = True if cacert is None else str(cacert)
         transport = httpx.HTTPTransport(retries=CONNECT_RETRIES, verify=verify)
-        self.client = httpx.Client(transport=transport)
+        self.client = httpx.Client(transport=transport, headers=headers)
 
     def _request(self, *args, **kwargs):
         response = self.client.request(*args, **kwargs)
@@ -172,10 +175,12 @@ def cli(fn):
         help="Path to write the entry id to",
     )
     p.add_argument("--url", required=False, default=DEFAULT_URL)
+    p.add_argument("--token", help="Bearer token to authenticate with")
     p.add_argument("--cacert", type=Path, help="CA certificate to verify host against")
     p.set_defaults(
         func=lambda args: submit_claim(
-            args.url, args.claim, args.out, args.out_entry_id, HttpClient(args.cacert)
+            args.url, args.claim, args.out, args.out_entry_id,
+            HttpClient(args.token, args.cacert)
         )
     )
 
@@ -183,10 +188,12 @@ def cli(fn):
     p.add_argument("--entry-id", required=True, type=str)
     p.add_argument("--out", required=True, type=Path, help="Path to write the claim to")
     p.add_argument("--url", required=False, default=DEFAULT_URL)
+    p.add_argument("--token", help="Bearer token to authenticate with")
     p.add_argument("--cacert", type=Path, help="CA certificate to verify host against")
     p.set_defaults(
         func=lambda args: retrieve_claim(
-            args.url, args.entry_id, args.out, HttpClient(args.cacert)
+            args.url, args.entry_id, args.out,
+            HttpClient(args.token, args.cacert)
         )
     )
 
@@ -196,10 +203,12 @@ def cli(fn):
         "--out", required=True, type=Path, help="Path to write the receipt to"
     )
     p.add_argument("--url", required=False, default=DEFAULT_URL)
+    p.add_argument("--token", help="Bearer token to authenticate with")
     p.add_argument("--cacert", type=Path, help="CA certificate to verify host against")
     p.set_defaults(
         func=lambda args: retrieve_receipt(
-            args.url, args.entry_id, args.out, HttpClient(args.cacert)
+            args.url, args.entry_id, args.out,
+            HttpClient(args.token, args.cacert)
         )
     )
 
