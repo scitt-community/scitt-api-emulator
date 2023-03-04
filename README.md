@@ -20,7 +20,7 @@ You can get things setup with the following:
 
 ```sh
 conda env create -f environment.yml
-conda activate scitt # this command fails for me
+conda activate scitt
 ```
 
 ## Clone the emulator

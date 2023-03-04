@@ -20,6 +20,7 @@ dependencies:
   - rfc3986=1.5.0
   - setuptools=66.1.1
   - wheel=0.38.4
+  - pip=22.3.1
   - pip:
     - asn1crypto==1.5.1
     - cbor2==5.4.6
