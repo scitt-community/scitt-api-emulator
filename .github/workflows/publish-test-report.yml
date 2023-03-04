@@ -26,6 +26,11 @@ jobs:
     - name: Run Postman Test Report
       run: ./run-sanity.sh
       working-directory: ./postman
+
+    - name: Publish to GitHub Pages 🚀
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: docs
    
   
   
