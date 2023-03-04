@@ -3,31 +3,32 @@ name: Publish Test Report
 on: [ push ]
 
 jobs:
-  ci-venv:
-    name: CI (venv)
+  publish-test-report:
+    name: Publish Test Report
     runs-on: ubuntu-latest
     strategy:
       matrix:
         python-version: ["3.8"]
     steps:
     - uses: actions/checkout@v3
+    - uses: actions/setup-node@v3
+        with:
+          node-version: 16.15.1
+          cache: 'npm'
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v4
       with:
         python-version: ${{ matrix.python-version }}
-    - run: ./run-tests.sh
+        
+    - name: Run API Emulator
+      run: ./scitt-emulator.sh server --workspace workspace/ --tree-alg CCF &
+    
+    - name: Install Postman
+      run: npm install -g newman newman-reporter-htmlextra
+
+    - name: Run Postman Test Report
+      run: ./run-sanity.sh
+      working-directory: ./postman
+   
   
-  ci-conda:
-    name: CI (conda)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        # https://github.com/conda-incubator/setup-miniconda#use-a-default-shell
-        shell: bash -el {0}
-    steps:
-    - uses: actions/checkout@v3
-    - uses: conda-incubator/setup-miniconda@v2
-      with:
-        activate-environment: scitt
-        environment-file: environment.yml
-    - run: python -m pytest
+  

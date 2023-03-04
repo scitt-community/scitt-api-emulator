@@ -6,8 +6,7 @@ Testing the SCITT Emulator with Postman.
 We will need to install some extra newman commands as well:
 
 ```
-npm install -g newman 
-npm install -g newman-reporter-htmlextra
+npm install -g newman  newman-reporter-htmlextra
 ```
 
 Run this command from this directory:
