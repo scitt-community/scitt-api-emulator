@@ -20,6 +20,9 @@ jobs:
     - name: Run API Emulator
       run: ./scitt-emulator.sh server --workspace workspace/ --tree-alg CCF &
     
+    - name: Sleep until server is ready
+      run: sleep 10
+    
     - name: Install Postman
       run: npm install -g newman newman-reporter-htmlextra
 
