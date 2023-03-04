@@ -6,7 +6,7 @@ set -e
 
 if [ ! -f "venv/bin/activate" ]; then
     echo "Setting up Python virtual environment."
-    python3.8 -m venv "venv"
+    python -m venv "venv"
     . ./venv/bin/activate
     pip install -q -e .
 else
