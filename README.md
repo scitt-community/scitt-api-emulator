@@ -1,0 +1,1 @@
+This directory is used to publish test reports to the `gh-pages` branch.
