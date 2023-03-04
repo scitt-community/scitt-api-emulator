@@ -28,9 +28,9 @@ jobs:
       working-directory: ./postman
 
     - name: Publish to GitHub Pages 🚀
-        uses: JamesIves/github-pages-deploy-action@v4
-        with:
-          folder: docs
-   
+      uses: JamesIves/github-pages-deploy-action@v4
+      with:
+        folder: docs
+  
   
   
