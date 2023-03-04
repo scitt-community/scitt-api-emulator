@@ -145,4 +145,4 @@ vscode
 
 workspace/
 *.cbor
-*.cose
+# *.cose
