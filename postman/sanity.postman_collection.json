@@ -1,7 +1,7 @@
 {
 	"info": {
 		"_postman_id": "4a4deeb8-dae7-4bdc-98ba-c457b1bffff1",
-		"name": "sanity",
+		"name": "SCITT Emulator Sanity Suite",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"item": [
@@ -9,17 +9,18 @@
 			"name": "Submit Claim",
 			"request": {
 				"method": "POST",
-				"header": [],
+				"header": [
+					{
+						"key": "Conten",
+						"value": "application/cose",
+						"type": "default"
+					}
+				],
 				"body": {
-						"mode": "formdata",
-						"formdata": [
-								{
-										"key": "file",
-										"type": "file",
-										"enabled": true,
-										"src": "claim.cose"
-								}
-						]
+					"mode": "file",
+					"file": {
+						"src": "./claim.cose"
+					}
 				},
 				"url": {
 					"raw": "http://127.0.0.1:8000/entries",
