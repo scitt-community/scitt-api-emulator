@@ -1,0 +1,39 @@
+name: Publish Test Report
+
+on: [ push ]
+
+jobs:
+  publish-test-report:
+    name: Publish Test Report
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.8"]
+    steps:
+    - uses: actions/checkout@v3
+    - uses: actions/setup-node@v3
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+        
+    - name: Run API Emulator
+      run: ./scitt-emulator.sh server --workspace workspace/ --tree-alg CCF &
+    
+    - name: Sleep until server is ready
+      run: sleep 10
+    
+    - name: Install Postman
+      run: npm install -g newman newman-reporter-htmlextra
+
+    - name: Run Postman Test Report
+      run: ./run-sanity.sh
+      working-directory: ./postman
+
+    - name: Publish to GitHub Pages 🚀
+      uses: JamesIves/github-pages-deploy-action@v4
+      with:
+        folder: docs
+  
+  
+  

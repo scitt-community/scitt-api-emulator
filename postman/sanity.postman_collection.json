@@ -1,0 +1,90 @@
+{
+	"info": {
+		"_postman_id": "4a4deeb8-dae7-4bdc-98ba-c457b1bffff1",
+		"name": "SCITT Emulator Sanity",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Submit Claim",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Conten",
+						"value": "application/cose",
+						"type": "default"
+					}
+				],
+				"body": {
+					"mode": "file",
+					"file": {
+						"src": "./claim.cose"
+					}
+				},
+				"url": {
+					"raw": "http://127.0.0.1:8000/entries",
+					"protocol": "http",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8000",
+					"path": [
+						"entries"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Retrieve Claim",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://127.0.0.1:8000/entries/1",
+					"protocol": "http",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8000",
+					"path": [
+						"entries",
+						"1"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Retrieve Receipt",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://127.0.0.1:8000/entries/1/receipt",
+					"protocol": "http",
+					"host": [
+						"127",
+						"0",
+						"0",
+						"1"
+					],
+					"port": "8000",
+					"path": [
+						"entries",
+						"1",
+						"receipt"
+					]
+				}
+			},
+			"response": []
+		}
+	]
+}
