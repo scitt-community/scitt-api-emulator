@@ -1,6 +1,6 @@
 {
 	"info": {
-		"_postman_id": "4a4deeb8-dae7-4bdc-98ba-c457b1bffff1",
+		"_postman_id": "5f8bcc82-332c-4c55-8d95-7f3861d65446",
 		"name": "SCITT Emulator Sanity",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
@@ -41,6 +41,53 @@
 		},
 		{
 			"name": "Retrieve Claim",
+			"event": [
+				{
+					"listen": "prerequest",
+					"script": {
+						"exec": [
+							"// https://blog.postman.com/adding-external-libraries-in-postman/\r",
+							"globalThis = this;\r",
+							"pm.sendRequest(\"https://cdn.jsdelivr.net/npm/cbor-x@1.5.1/dist/index.min.js\", (err, res) => {\r",
+							"   eval(res.text());   \r",
+							"})"
+						],
+						"type": "text/javascript"
+					}
+				},
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"CBOR = globalThis.CBOR;\r",
+							"\r",
+							"const COSESign1Tag = 18;\r",
+							"const COSEAlgorithmLabel = 1;\r",
+							"const COSEContentTypeLabel = 3;\r",
+							"\r",
+							"pm.test(\"Valid Claim response\", function () {\r",
+							"    pm.expect(pm.response.code).to.be.oneOf([200]);\r",
+							"\r",
+							"    const msg = new CBOR.Decoder({mapsAsObjects: false}).decode(pm.response.stream);\r",
+							"    pm.expect(msg.tag).to.equal(COSESign1Tag);\r",
+							"    pm.expect(msg.value).to.have.length(4);\r",
+							"\r",
+							"    const [phdr, uhdr, payload, signature] = msg.value;\r",
+							"    pm.expect(phdr).to.be.instanceof(Buffer);\r",
+							"    pm.expect(uhdr).to.be.instanceof(Map);\r",
+							"    pm.expect(payload).to.be.instanceof(Buffer);\r",
+							"    pm.expect(signature).to.be.instanceof(Buffer);\r",
+							"\r",
+							"    const phdrDecoded = new CBOR.Decoder({mapsAsObjects: false}).decode(phdr);\r",
+							"    pm.expect(phdrDecoded).to.be.instanceof(Map);\r",
+							"    pm.expect(typeof phdrDecoded.get(COSEAlgorithmLabel)).to.be.oneOf(['number', 'string']);\r",
+							"    pm.expect(typeof phdrDecoded.get(COSEContentTypeLabel)).to.be.oneOf(['number', 'string']);\r",
+							"});"
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
 			"request": {
 				"method": "GET",
 				"header": [],
