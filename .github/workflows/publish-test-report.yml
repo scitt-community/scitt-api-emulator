@@ -1,6 +1,9 @@
 name: Publish Test Report
 
-on: [ push ]
+on:
+  push:
+    branches:
+      - main
 
 jobs:
   publish-test-report:
