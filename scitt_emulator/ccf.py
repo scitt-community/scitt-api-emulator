@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-from typing import Optional
+from typing import Optional, Tuple
 from pathlib import Path
 from hashlib import sha256
 import datetime
@@ -103,8 +103,8 @@ class CCFSCITTServiceEmulator(SCITTServiceEmulator):
         # Compute Merkle tree leaf hash
         countersign_tbi_hash = sha256(countersign_tbi).digest()
         internal_hash = sha256(b"dummy").digest()
-        internal_data = f"{entry_id}"
-        internal_data_hash = sha256(internal_data.encode("ascii")).digest()
+        internal_data = f"{entry_id}".encode("ascii")
+        internal_data_hash = sha256(internal_data).digest()
         leaf = sha256(
             internal_hash + internal_data_hash + countersign_tbi_hash
         ).digest()
@@ -119,7 +119,9 @@ class CCFSCITTServiceEmulator(SCITTServiceEmulator):
         print("Root: " + root.hex())
 
         # Sign root
-        signature = node_priv_key.sign(root, ec.ECDSA(utils.Prehashed(hashes.SHA256())))
+        signature_dss = node_priv_key.sign(root, ec.ECDSA(utils.Prehashed(hashes.SHA256())))
+        curve_size = node_priv_key.curve.key_size // 8
+        signature = convert_dss_signature_to_p1363(signature_dss, curve_size)
 
         # Compute Merkle tree proof
         # Simplification, since the tree has an even number of leaves
@@ -139,7 +141,7 @@ class CCFSCITTServiceEmulator(SCITTServiceEmulator):
 
         # Compute Merkle tree leaf hash
         countersign_tbi_hash = sha256(countersign_tbi).digest()
-        internal_data_hash = sha256(internal_data.encode("ascii")).digest()
+        internal_data_hash = sha256(internal_data).digest()
         leaf = sha256(
             internal_hash + internal_data_hash + countersign_tbi_hash
         ).digest()
@@ -156,9 +158,10 @@ class CCFSCITTServiceEmulator(SCITTServiceEmulator):
         print("Root: " + root.hex())
 
         # Verify Merkle tree root signature
+        signature_dss = convert_p1363_signature_to_dss(signature)
         node_cert = x509.load_der_x509_certificate(node_cert_der)
         node_cert.public_key().verify(
-            signature, root, ec.ECDSA(utils.Prehashed(hashes.SHA256()))
+            signature_dss, root, ec.ECDSA(utils.Prehashed(hashes.SHA256()))
         )
 
         # Verify node certificate
@@ -166,6 +169,50 @@ class CCFSCITTServiceEmulator(SCITTServiceEmulator):
             self.service_parameters["serviceCertificate"].encode("utf-8")
         )
         verify_certificate_is_issued_by(node_cert, service_cert)
+
+
+def decode_p1363_signature(signature: bytes) -> Tuple[int, int]:
+    """
+    Decode an ECDSA signature from its IEEE P1363 encoding into its r and s
+    components. The two integers are padded to the curve size and concatenated.
+
+    This is the format used throughout the COSE/JOSE ecosystem.
+    """
+    # The two components are padded to the same size, so we can find the size
+    # of each one by taking half the size of the signature.
+    if len(signature) % 2 != 0:
+        raise ValueError("Signature must be an even number of bytes")
+    mid = len(signature) // 2
+    r = int.from_bytes(signature[:mid], "big")
+    s = int.from_bytes(signature[mid:], "big")
+    return r, s
+
+
+def convert_p1363_signature_to_dss(signature: bytes) -> bytes:
+    """
+    Convert an ECDSA signature from its IEEE P1363 encoding to an ASN1/DER
+    encoding.
+
+    The former is the format used throughout the COSE/JOSE ecosystem.
+    The latter is used by OpenSSL and the cryptography package.
+    """
+    r, s = decode_p1363_signature(signature)
+    return utils.encode_dss_signature(r, s)
+
+
+def convert_dss_signature_to_p1363(signature: bytes, curve_size: int) -> bytes:
+    """
+    Convert an ECDSA signature from its ASN1/DER encoding to IEEE P1363
+    encoding.
+
+    The former is used by OpenSSL and the cryptography package.
+    The latter is the format used throughout the COSE/JOSE ecosystem.
+    """
+    r, s = utils.decode_dss_signature(signature)
+    try:
+        return r.to_bytes(curve_size, "big") + s.to_bytes(curve_size, "big")
+    except OverflowError:
+        raise ValueError("Signature is too large for given curve size")
 
 
 def verify_certificate_is_issued_by(
