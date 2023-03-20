@@ -11,7 +11,7 @@
 				"method": "POST",
 				"header": [
 					{
-						"key": "Conten",
+						"key": "Content-Type",
 						"value": "application/cose",
 						"type": "default"
 					}

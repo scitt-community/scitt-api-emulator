@@ -73,7 +73,8 @@ def submit_claim(
         claim = f.read()
 
     # Submit claim
-    response = client.post(f"{url}/entries", content=claim)
+    response = client.post(f"{url}/entries", content=claim, headers={
+        "Content-Type": "application/cose"})
     if response.status_code == 201:
         entry = response.json()
         entry_id = entry["entryId"]
