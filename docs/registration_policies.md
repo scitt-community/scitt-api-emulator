@@ -12,6 +12,8 @@ The SCITT API emulator can deny entry based on presence of
 This is a simple way to enable evaluation of claims prior to submission by
 arbitrary policy engines which watch the workspace (fanotify, inotify, etc.).
 
+[![asciicast-of-simple-decoupled-file-based-policy-engine](https://asciinema.org/a/572766.svg)](https://asciinema.org/a/572766)
+
 Start the server
 
 ```console
