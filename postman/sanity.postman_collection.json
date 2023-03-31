@@ -1,6 +1,6 @@
 {
 	"info": {
-		"_postman_id": "5f8bcc82-332c-4c55-8d95-7f3861d65446",
+		"_postman_id": "65cc66cf-890a-46e9-aefc-964212bb6f70",
 		"name": "SCITT Emulator Sanity",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
@@ -65,22 +65,30 @@
 							"const COSEAlgorithmLabel = 1;\r",
 							"const COSEContentTypeLabel = 3;\r",
 							"\r",
-							"pm.test(\"Valid Claim response\", function () {\r",
-							"    pm.expect(pm.response.code).to.be.oneOf([200]);\r",
+							"const msg = new CBOR.Decoder({mapsAsObjects: false}).decode(pm.response.stream);\r",
+							"const [phdr, uhdr, payload, signature] = msg.value;\r",
+							"const phdrDecoded = new CBOR.Decoder({mapsAsObjects: false}).decode(phdr);\r",
 							"\r",
-							"    const msg = new CBOR.Decoder({mapsAsObjects: false}).decode(pm.response.stream);\r",
+							"pm.test(\"http status code is correct\", function () {\r",
+							"    pm.expect(pm.response.code).to.be.oneOf([200]);\r",
+							"});\r",
+							"\r",
+							"pm.test(\"response body is COSESign1\", function () {\r",
 							"    pm.expect(msg.tag).to.equal(COSESign1Tag);\r",
 							"    pm.expect(msg.value).to.have.length(4);\r",
-							"\r",
 							"    const [phdr, uhdr, payload, signature] = msg.value;\r",
 							"    pm.expect(phdr).to.be.instanceof(Buffer);\r",
 							"    pm.expect(uhdr).to.be.instanceof(Map);\r",
 							"    pm.expect(payload).to.be.instanceof(Buffer);\r",
 							"    pm.expect(signature).to.be.instanceof(Buffer);\r",
-							"\r",
-							"    const phdrDecoded = new CBOR.Decoder({mapsAsObjects: false}).decode(phdr);\r",
 							"    pm.expect(phdrDecoded).to.be.instanceof(Map);\r",
+							"});\r",
+							"\r",
+							"pm.test(\"protected header has alg\", function () {\r",
 							"    pm.expect(typeof phdrDecoded.get(COSEAlgorithmLabel)).to.be.oneOf(['number', 'string']);\r",
+							"});\r",
+							"\r",
+							"pm.test(\"protected header has ctyp\", function () {\r",
 							"    pm.expect(typeof phdrDecoded.get(COSEContentTypeLabel)).to.be.oneOf(['number', 'string']);\r",
 							"});"
 						],
@@ -111,6 +119,32 @@
 		},
 		{
 			"name": "Retrieve Receipt",
+			"event": [
+				{
+					"listen": "prerequest",
+					"script": {
+						"exec": [
+							"// https://blog.postman.com/adding-external-libraries-in-postman/",
+							"globalThis = this;",
+							"pm.sendRequest(\"https://cdn.jsdelivr.net/npm/cbor-x@1.5.1/dist/index.min.js\", (err, res) => {",
+							"   eval(res.text());   ",
+							"})"
+						],
+						"type": "text/javascript"
+					}
+				},
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"// TODO: implement assertions on the structure of a receipt",
+							"// TODO: cover the mandatory protected header fields",
+							"// TODO: address the transparent statement vs simple receipt issue"
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
 			"request": {
 				"method": "GET",
 				"header": [],
