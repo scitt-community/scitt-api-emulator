@@ -4,6 +4,7 @@
 from typing import Optional
 from abc import ABC, abstractmethod
 from pathlib import Path
+import contextlib
 import time
 import json
 import uuid
@@ -36,6 +37,10 @@ class EntryNotFoundError(Exception):
 
 
 class OperationNotFoundError(Exception):
+    pass
+
+
+class PolicyResultDecodeError(Exception):
     pass
 
 
@@ -168,9 +173,21 @@ class SCITTServiceEmulator(ABC):
             policy_insert_path.unlink()
         if policy_failed_path.exists():
             policy_result["status"] = "failed"
+            if policy_failed_path.stat().st_size != 0:
+                try:
+                    policy_result_error = json.loads(policy_failed_path.read_text())
+                except Exception as error:
+                    raise PolicyResultDecodeError(operation_id) from error
+                policy_result["error"] = policy_result_error
             policy_failed_path.unlink()
         if policy_denied_path.exists():
             policy_result["status"] = "denied"
+            if policy_denied_path.stat().st_size != 0:
+                try:
+                    policy_result_error = json.loads(policy_denied_path.read_text())
+                except Exception as error:
+                    raise PolicyResultDecodeError(operation_id) from error
+                policy_result["error"] = policy_result_error
             policy_denied_path.unlink()
 
         return policy_result
@@ -185,7 +202,8 @@ class SCITTServiceEmulator(ABC):
             return operation
         if policy_result["status"] != "succeeded":
             operation["status"] = "failed"
-            operation["error"] = policy_result
+            if "error" in policy_result:
+                operation["error"] = policy_result["error"]
             operation_path.unlink()
             claim_src_path.unlink()
             return operation

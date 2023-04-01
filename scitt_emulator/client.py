@@ -17,6 +17,14 @@ HTTP_RETRIES = 3
 HTTP_DEFAULT_RETRY_DELAY = 1
 
 
+class ClaimOperationError(Exception):
+    def __init__(self, operation):
+        self.operation = operation
+
+    def __str__(self):
+        return f"Operation error: {self.operation}"
+
+
 def raise_for_status(response: httpx.Response):
     if response.is_success:
         return
@@ -26,7 +34,7 @@ def raise_for_status(response: httpx.Response):
 def raise_for_operation_status(operation: dict):
     if operation["status"] != "failed":
         return
-    raise RuntimeError(f"Operation error: {operation['error']}")
+    raise ClaimOperationError(operation)
 
 
 class HttpClient:

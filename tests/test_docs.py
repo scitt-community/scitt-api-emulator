@@ -3,8 +3,10 @@
 import os
 import sys
 import time
+import json
 import types
 import pathlib
+import tempfile
 import threading
 import itertools
 import subprocess
@@ -14,6 +16,8 @@ import pytest
 import myst_parser.parsers.docutils_
 import docutils.nodes
 import docutils.utils
+
+from scitt_emulator.client import ClaimOperationError
 
 from .test_cli import (
     Service,
@@ -27,6 +31,7 @@ repo_root = pathlib.Path(__file__).parents[1]
 docs_dir = repo_root.joinpath("docs")
 blocklisted_issuer = "did:web:example.com"
 non_blocklisted_issuer = "did:web:example.org"
+CLAIM_DENIED_ERROR = {"type": "denied", "detail": "content_address_of_reason"}
 
 
 class SimpleFileBasedPolicyEngine:
@@ -68,14 +73,18 @@ class SimpleFileBasedPolicyEngine:
                         stdin=stdin_fileobj,
                     )
                 # EXIT_SUCCESS from blocklist == MUST block
-                env = {
-                    **os.environ,
-                    "POLICY_ACTION": {
-                        0: "denied",
-                    }.get(exit_code, "insert"),
-                }
-                command = command_enforce_policy + [cose_path]
-                exit_code = subprocess.call(command, env=env)
+                with tempfile.TemporaryDirectory() as tempdir:
+                    policy_reason_path = pathlib.Path(tempdir, "reason.json")
+                    policy_reason_path.write_text(json.dumps(CLAIM_DENIED_ERROR))
+                    env = {
+                        **os.environ,
+                        "POLICY_REASON_PATH": str(policy_reason_path),
+                        "POLICY_ACTION": {
+                            0: "denied",
+                        }.get(exit_code, "insert"),
+                    }
+                    command = command_enforce_policy + [cose_path]
+                    exit_code = subprocess.call(command, env=env)
             time.sleep(0.1)
             running = not stop_event.is_set()
 
@@ -175,8 +184,14 @@ def test_docs_registration_policies(tmp_path):
             "--url",
             service.url
         ]
-        with pytest.raises(RuntimeError, match=r"denied"):
+        check_error = None
+        try:
             execute_cli(command)
+        except ClaimOperationError as error:
+            check_error = error
+        assert check_error
+        assert "error" in check_error.operation
+        assert check_error.operation["error"] == CLAIM_DENIED_ERROR
         assert not os.path.exists(receipt_path)
         assert not os.path.exists(entry_id_path)
 

@@ -49,9 +49,13 @@ import os
 import sys
 import pathlib
 
+policy_reason = ""
+if "POLICY_REASON_PATH" in os.environ:
+    policy_reason = pathlib.Path(os.environ["POLICY_REASON_PATH"]).read_text()
+
 cose_path = pathlib.Path(sys.argv[-1])
 policy_action_path = cose_path.with_suffix(".policy." + os.environ["POLICY_ACTION"].lower())
-policy_action_path.write_text("")
+policy_action_path.write_text(policy_reason)
 ```
 
 Simple drop rule based on claim content blocklist.
@@ -97,7 +101,8 @@ Example running blocklist check and enforcement to disable issuer (example:
 
 ```console
 $ npm install -g nodemon
-$ nodemon -e .cose --exec 'find workspace/storage/operations -name \*.cose -exec nohup sh -xc "echo {} && (python3 is_on_blocklist.py < {} && POLICY_ACTION=denied python3 enforce_policy.py {}) || POLICY_ACTION=insert python3 enforce_policy.py {}" \;'
+$ echo '{"type": "denied", "detail": "content_address_of_reason"}' | tee reason.json
+$ nodemon -e .cose --exec 'find workspace/storage/operations -name \*.cose -exec nohup sh -xc "echo {} && (python3 is_on_blocklist.py < {} && POLICY_ACTION=denied POLICY_REASON_PATH=reason.json python3 enforce_policy.py {}) || POLICY_ACTION=insert python3 enforce_policy.py {}" \;'
 ```
 
 Create claim from blocked issuer (`.com`) and from non-blocked (`.org`).
@@ -111,13 +116,13 @@ Traceback (most recent call last):
     sys.exit(load_entry_point('scitt-emulator', 'console_scripts', 'scitt-emulator')())
   File "/home/alice/Documents/python/scitt-api-emulator/scitt_emulator/cli.py", line 22, in main
     args.func(args)
-  File "/home/alice/Documents/python/scitt-api-emulator/scitt_emulator/client.py", line 182, in <lambda>
+  File "/home/alice/Documents/python/scitt-api-emulator/scitt_emulator/client.py", line 190, in <lambda>
     func=lambda args: submit_claim(
-  File "/home/alice/Documents/python/scitt-api-emulator/scitt_emulator/client.py", line 93, in submit_claim
+  File "/home/alice/Documents/python/scitt-api-emulator/scitt_emulator/client.py", line 101, in submit_claim
     raise_for_operation_status(operation)
-  File "/home/alice/Documents/python/scitt-api-emulator/scitt_emulator/client.py", line 29, in raise_for_operation_status
-    raise RuntimeError(f"Operation error: {operation['error']}")
-RuntimeError: Operation error: {'status': 'denied'}
+  File "/home/alice/Documents/python/scitt-api-emulator/scitt_emulator/client.py", line 37, in raise_for_operation_status
+    raise ClaimOperationError(operation)
+scitt_emulator.client.ClaimOperationError: Operation error: {'error': {'detail': 'content_address_of_reason', 'type': 'denied'}, 'operationId': '9693b076-f992-44e1-b7b9-865c600a96f7', 'status': 'failed'}
 $ scitt-emulator client create-claim --issuer did:web:example.org --content-type application/json --payload '{"sun": "yellow"}' --out claim.cose
 Claim written to claim.cose
 $ scitt-emulator client submit-claim --claim claim.cose --out claim.receipt.cbor
