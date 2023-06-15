@@ -1,6 +1,10 @@
-# SCITT API emulator
+# SCITT API interoperability client
 
-This repository contains the source code for the SCITT API emulator. It is meant to allow experimenting with [SCITT](https://datatracker.ietf.org/wg/scitt/about/) APIs and formats. It is not meant to be used in production code.
+This repository contains the source code for the SCITT API interoperability client and sample emulator.
+
+It is meant to allow experimenting with [SCITT](https://datatracker.ietf.org/wg/scitt/about/) APIs and formats and proving interoperability of implementations. 
+
+Note the SCITT standards are not yet fully published and are subject to change. This repository aims to keep up with changes to the WG output as faithfully as possible but in the event of inconsistencies between this and the IETF WG documents, the IETF documents are primary.
 
 ## Prerequisites
 
@@ -41,15 +45,26 @@ then:
 cd scitt-api-emulator
 ```
 
-## Use the emulator
+## Start the proxy server
 
-### Start a fake SCITT service
+The proxy server supports 2 options currently:
+ - 'CCF' uses the emulator server to create and verify receipts using the CCF tree algorithm
+ - 'RKVST' uses the RKVST production SaaS server to create and verify  receipts using native Merkle trees
+
+Note the emulated is for experimentation only and not recommended for production use.
+
+### Start a fake emulated SCITT service
 
 ```sh
 ./scitt-emulator.sh server --workspace workspace/ --tree-alg CCF
 ```
 
-`--tree-alg` is currently `CCF` only. 
+### Start an RKVST SCITT proxy service
+
+```sh
+./scitt-emulator.sh server --workspace workspace/ --tree-alg RKVST
+```
+
 
 The default port is 8000 but can be changed with the `--port` argument.
 
@@ -141,6 +156,8 @@ The following websites can be used to inspect COSE and CBOR files:
 `scitt_emulator/scitt.py` contains the core SCITT algorithms that are agnostic of a specific tree algorithm.
 
 `scitt_emulator/ccf.py` is the implementation of the [CCF tree algorithm](https://ietf-scitt.github.io/draft-birkholz-scitt-receipts/draft-birkholz-scitt-receipts.html#name-ccf-tree-algorithm). For each claim, a receipt is generated using a fake but valid Merkle tree that is independent of other submitted claims. A real CCF service would maintain a single Merkle tree covering all submitted claims and auxiliarly entries.
+
+`scitt_emulator/rkvst.py` is a simple REST proxy that takes SCITT standard API calls and routes them through to the [RKVST production SaaS service](https://app.rkvst.io). Each claim is stored in a Merkle tree underpinning a Quorum blockchain and  receipts contain valid, verifiable inclusion proofs for the claim in that Merkle proof. [More docs on receipts here](https://docs.rkvst.com/platform/overview/scitt-receipts/).
 
 `scitt_emulator/server.py` is a simple Flask server that acts as a SCITT transparency service.
 
