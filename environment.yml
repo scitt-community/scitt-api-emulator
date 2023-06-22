@@ -28,5 +28,5 @@ dependencies:
     - pycose==1.0.1
     - ecdsa==0.18.0
     - oscrypto==1.3.0
-    - rkvst-archivist=0.20.0
+    - rkvst-archivist==0.20.0
     - six==1.16.0
