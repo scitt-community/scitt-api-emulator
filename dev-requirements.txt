@@ -1,5 +1,5 @@
+pyOpenSSL
 pytest
-rkvst-archivist==0.20.0
 requests==2.28
 requests-toolbelt==0.9
-pyOpenSSL
+urllib3<2.0.0
