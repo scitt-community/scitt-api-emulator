@@ -4,9 +4,11 @@ import os
 import sys
 import time
 import json
+import copy
 import types
 import pathlib
 import tempfile
+import textwrap
 import threading
 import itertools
 import subprocess
@@ -32,6 +34,20 @@ docs_dir = repo_root.joinpath("docs")
 blocklisted_issuer = "did:web:example.com"
 non_blocklisted_issuer = "did:web:example.org"
 CLAIM_DENIED_ERROR = {"type": "denied", "detail": "content_address_of_reason"}
+CLAIM_DENIED_ERROR_BLOCKED = {
+    "type": "denied",
+    "detail": textwrap.dedent(
+        """
+        'did:web:example.com' should not be valid under {'enum': ['did:web:example.com']}
+
+        Failed validating 'not' in schema['properties']['issuer']:
+            {'not': {'enum': ['did:web:example.com']}, 'type': 'string'}
+
+        On instance['issuer']:
+            'did:web:example.com'
+        """
+    ).lstrip(),
+}
 
 
 class SimpleFileBasedPolicyEngine:
@@ -55,9 +71,9 @@ class SimpleFileBasedPolicyEngine:
     @staticmethod
     def poll_workspace(config, stop_event):
         operations_path = pathlib.Path(config["storage_path"], "operations")
-        command_is_on_blocklist = [
+        command_jsonschema_validator = [
             sys.executable,
-            str(config["is_on_blocklist"].resolve()),
+            str(config["jsonschema_validator"].resolve()),
         ]
         command_enforce_policy = [
             sys.executable,
@@ -67,21 +83,33 @@ class SimpleFileBasedPolicyEngine:
         running = True
         while running:
             for cose_path in operations_path.glob("*.cose"):
+                denial = copy.deepcopy(CLAIM_DENIED_ERROR)
                 with open(cose_path, "rb") as stdin_fileobj:
-                    exit_code = subprocess.call(
-                        command_is_on_blocklist,
-                        stdin=stdin_fileobj,
-                    )
-                # EXIT_SUCCESS from blocklist == MUST block
+                    env = {
+                        **os.environ,
+                        "SCHEMA_PATH": str(config["schema_path"].resolve()),
+                    }
+                    exit_code = 0
+                    try:
+                        subprocess.check_output(
+                            command_jsonschema_validator,
+                            stdin=stdin_fileobj,
+                            stderr=subprocess.STDOUT,
+                            env=env,
+                        )
+                    except subprocess.CalledProcessError as error:
+                        denial["detail"] = error.output.decode()
+                        exit_code = error.returncode
+                # EXIT_FAILRUE from validator == MUST block
                 with tempfile.TemporaryDirectory() as tempdir:
                     policy_reason_path = pathlib.Path(tempdir, "reason.json")
-                    policy_reason_path.write_text(json.dumps(CLAIM_DENIED_ERROR))
+                    policy_reason_path.write_text(json.dumps(denial))
                     env = {
                         **os.environ,
                         "POLICY_REASON_PATH": str(policy_reason_path),
                         "POLICY_ACTION": {
-                            0: "denied",
-                        }.get(exit_code, "insert"),
+                            0: "insert",
+                        }.get(exit_code, "denied"),
                     }
                     command = command_enforce_policy + [cose_path]
                     exit_code = subprocess.call(command, env=env)
@@ -149,7 +177,8 @@ def test_docs_registration_policies(tmp_path):
         {
             "storage_path": service.server.app.scitt_service.storage_path,
             "enforce_policy": tmp_path.joinpath("enforce_policy.py"),
-            "is_on_blocklist": tmp_path.joinpath("is_on_blocklist.py"),
+            "jsonschema_validator": tmp_path.joinpath("jsonschema_validator.py"),
+            "schema_path": tmp_path.joinpath("blocklist.schema.json"),
         }
     ) as policy_engine:
         # set the policy to enforce
@@ -191,7 +220,7 @@ def test_docs_registration_policies(tmp_path):
             check_error = error
         assert check_error
         assert "error" in check_error.operation
-        assert check_error.operation["error"] == CLAIM_DENIED_ERROR
+        assert check_error.operation["error"] == CLAIM_DENIED_ERROR_BLOCKED
         assert not os.path.exists(receipt_path)
         assert not os.path.exists(entry_id_path)
 
