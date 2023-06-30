@@ -69,6 +69,7 @@ import json
 
 import cbor2
 import pycose
+from jsonschema import validate
 from pycose.messages import CoseMessage, Sign1Message
 
 from scitt_emulator.scitt import ClaimInvalidError, COSE_Headers_Issuer
@@ -84,16 +85,25 @@ claim = sys.stdin.buffer.read()
 msg = CoseMessage.decode(claim)
 
 if pycose.headers.ContentType not in msg.phdr:
-    raise ClaimInvalidError(
-        "Claim does not have a content type header parameter"
-    )
+    raise ClaimInvalidError("Claim does not have a content type header parameter")
 if COSE_Headers_Issuer not in msg.phdr:
     raise ClaimInvalidError("Claim does not have an issuer header parameter")
 
-if msg.phdr[COSE_Headers_Issuer] not in BLOCKLIST:
-    sys.exit(1)
+if not msg[pycose.headers.ContentType].startswith("application/json"):
+    raise TypeError(
+        f"Claim content type does not start with application/json: {msg[pycose.headers.ContentType]!r}"
+    )
 
-# EXIT_SUCCESS == MUST block. In case of thrown errors/exceptions.
+SCHEMA = json.loads(pathlib.Path(os.environ["SCHEMA"]).read_text())
+
+validate(
+    instance={
+        "$schema": "TODO",
+        "issuer": msg.phdr[COSE_Headers_Issuer],
+        "cliam": json.loads(msg.payload),
+    },
+    schema=SCHEMA,
+)
 ```
 
 Example running blocklist check and enforcement to disable issuer (example:
