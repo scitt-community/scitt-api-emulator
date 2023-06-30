@@ -28,7 +28,7 @@ Modification of config to non-`*` insert policy. Restart SCITT API emulator serv
 
 ```console
 $ echo "$(cat workspace/service_parameters.json)" \
-    | jq '.insertPolicy = "blocklist.schema.json"' \
+    | jq '.insertPolicy = "allowlist.schema.json"' \
     | tee workspace/service_parameters.json.new \
     && mv workspace/service_parameters.json.new workspace/service_parameters.json
 {
@@ -36,7 +36,7 @@ $ echo "$(cat workspace/service_parameters.json)" \
   "treeAlgorithm": "CCF",
   "signatureAlgorithm": "ES256",
   "serviceCertificate": "-----BEGIN CERTIFICATE-----",
-  "insertPolicy": "blocklist.schema.json"
+  "insertPolicy": "allowlist.schema.json"
 }
 ```
 
@@ -58,31 +58,20 @@ policy_action_path = cose_path.with_suffix(".policy." + os.environ["POLICY_ACTIO
 policy_action_path.write_text(policy_reason)
 ```
 
-Simple drop rule based on claim content blocklist.
+Simple drop rule based on claim content allowlist.
 
-**blocklist.schema.json**
+**allowlist.schema.json**
 
 ```json
 {
-    "$id": "https://schema.example.com/scitt-blocklist.schema.json",
+    "$id": "https://schema.example.com/scitt-allowlist.schema.json",
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
-        "$schema": {
-            "type": "string"
-        },
-        "@context": {
-            "type": "array",
-            "items": {
-                "type": "string"
-            }
-        },
         "issuer": {
             "type": "string",
-            "not": {
-                "enum": [
-                    "did:web:example.com"
-                ]
-            }
+            "enum": [
+                "did:web:example.org"
+            ]
         }
     }
 }
@@ -123,7 +112,7 @@ SCHEMA = json.loads(pathlib.Path(os.environ["SCHEMA_PATH"]).read_text())
 try:
     validate(
         instance={
-            "$schema": "TODO",
+            "$schema": "https://schema.example.com/scitt-policy-engine-jsonschema.schema.json",
             "issuer": msg.phdr[COSE_Headers_Issuer],
             "claim": json.loads(msg.payload.decode()),
         },
@@ -148,8 +137,7 @@ echo ${CLAIM_PATH}
 (python3 jsonschema_validator.py < ${CLAIM_PATH} 2>error && POLICY_ACTION=insert python3 enforce_policy.py ${CLAIM_PATH}) || (python3 -c 'import sys, json; print(json.dumps({"type": "denied", "detail": json.dumps(sys.stdin.read())}))' < error > reason.json; POLICY_ACTION=denied POLICY_REASON_PATH=reason.json python3 enforce_policy.py ${CLAIM_PATH})
 ```
 
-Example running blocklist check and enforcement to disable issuer (example:
-`did:web:example.com`).
+Example running allowlist check and enforcement.
 
 ```console
 $ npm install -g nodemon
@@ -162,7 +150,7 @@ Also ensure you restart the server with the new config we edited.
 $ scitt-emulator server --workspace workspace/ --tree-alg CCF --use-lro
 ```
 
-Create claim from blocked issuer (`.com`) and from non-blocked (`.org`).
+Create claim from allowed issuer (`.org`) and from non-allowed (`.com`).
 
 ```console
 $ scitt-emulator client create-claim --issuer did:web:example.com --content-type application/json --payload '{"sun": "yellow"}' --out claim.cose

@@ -31,17 +31,17 @@ from .test_cli import (
 
 repo_root = pathlib.Path(__file__).parents[1]
 docs_dir = repo_root.joinpath("docs")
-blocklisted_issuer = "did:web:example.com"
-non_blocklisted_issuer = "did:web:example.org"
+allowlisted_issuer = "did:web:example.org"
+non_allowlisted_issuer = "did:web:example.com"
 CLAIM_DENIED_ERROR = {"type": "denied", "detail": "content_address_of_reason"}
 CLAIM_DENIED_ERROR_BLOCKED = {
     "type": "denied",
     "detail": textwrap.dedent(
         """
-        'did:web:example.com' should not be valid under {'enum': ['did:web:example.com']}
+        'did:web:example.com' is not one of ['did:web:example.org']
 
-        Failed validating 'not' in schema['properties']['issuer']:
-            {'not': {'enum': ['did:web:example.com']}, 'type': 'string'}
+        Failed validating 'enum' in schema['properties']['issuer']:
+            {'enum': ['did:web:example.org'], 'type': 'string'}
 
         On instance['issuer']:
             'did:web:example.com'
@@ -133,7 +133,7 @@ def docutils_recursively_extract_nodes(node, samples = None):
 def docutils_find_code_samples(nodes):
     samples = {}
     for i, node in enumerate(nodes):
-        # Look ahead for next literal block with code sample. Pattern is:
+        # Look ahead for next literal allow with code sample. Pattern is:
         #
         # **strong.suffix**
         #
@@ -178,7 +178,7 @@ def test_docs_registration_policies(tmp_path):
             "storage_path": service.server.app.scitt_service.storage_path,
             "enforce_policy": tmp_path.joinpath("enforce_policy.py"),
             "jsonschema_validator": tmp_path.joinpath("jsonschema_validator.py"),
-            "schema_path": tmp_path.joinpath("blocklist.schema.json"),
+            "schema_path": tmp_path.joinpath("allowlist.schema.json"),
         }
     ) as policy_engine:
         # set the policy to enforce
@@ -191,7 +191,7 @@ def test_docs_registration_policies(tmp_path):
             "--out",
             claim_path,
             "--issuer",
-            blocklisted_issuer,
+            non_allowlisted_issuer,
             "--content-type",
             content_type,
             "--payload",
@@ -231,7 +231,7 @@ def test_docs_registration_policies(tmp_path):
             "--out",
             claim_path,
             "--issuer",
-            non_blocklisted_issuer,
+            allowlisted_issuer,
             "--content-type",
             content_type,
             "--payload",
