@@ -100,7 +100,7 @@ validate(
     instance={
         "$schema": "TODO",
         "issuer": msg.phdr[COSE_Headers_Issuer],
-        "cliam": json.loads(msg.payload),
+        "cliam": json.loads(msg.payload.decode()),
     },
     schema=SCHEMA,
 )
