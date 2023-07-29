@@ -98,7 +98,7 @@ def submit_claim(
         raise RuntimeError(f"Unexpected status code: {response.status_code}")
 
     # Fetch receipt
-    response = client.get(f"{url}/entries/{entry_id}/receipt")
+    response = client.get(f"{url}/entries/{entry_id}/receipt", timeout=15)
     receipt = response.content
 
     print(f"Claim registered with entry ID {entry_id}")

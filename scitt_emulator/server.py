@@ -79,6 +79,7 @@ def create_flask_app(config):
         try:
             if use_lro:
                 result = app.scitt_service.submit_claim(request.get_data(), long_running=True)
+                print(result)
                 headers = {
                     "Location": f"{request.host_url}/operations/{result['operationId']}",
                     "Retry-After": "1"
