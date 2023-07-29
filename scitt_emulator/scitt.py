@@ -211,7 +211,6 @@ class SCITTServiceEmulator(ABC):
         print(f"Receipt written to {receipt_path}")
 
     def get_receipt(self, entry_id: str):
-        print('>>> In here for some reason')
         receipt_path = self.storage_path / f"{entry_id}.receipt.cbor"
         try:
             with open(receipt_path, "rb") as f:
