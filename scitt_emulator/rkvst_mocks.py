@@ -8,7 +8,7 @@ mock_feed_id=""
 
 mock_claim={}
 
-mock_event_lro_incomplete={}}
+mock_event_lro_incomplete={}
 
 mock_event_lro_complete={}
 
