@@ -134,7 +134,7 @@ CLAIM_PATH="${2}"
 
 echo ${CLAIM_PATH}
 
-(python3 jsonschema_validator.py < ${CLAIM_PATH} 2>error && POLICY_ACTION=insert python3 enforce_policy.py ${CLAIM_PATH}) || (python3 -c 'import sys, json; print(json.dumps({"type": "denied", "detail": json.dumps(sys.stdin.read())}))' < error > reason.json; POLICY_ACTION=denied POLICY_REASON_PATH=reason.json python3 enforce_policy.py ${CLAIM_PATH})
+(python3 jsonschema_validator.py < ${CLAIM_PATH} 2>error && POLICY_ACTION=insert python3 enforce_policy.py ${CLAIM_PATH}) || (python3 -c 'import sys, json; print(json.dumps({"type": "denied", "detail": sys.stdin.read()}))' < error > reason.json; POLICY_ACTION=denied POLICY_REASON_PATH=reason.json python3 enforce_policy.py ${CLAIM_PATH})
 ```
 
 Example running allowlist check and enforcement.
@@ -161,13 +161,20 @@ Traceback (most recent call last):
     sys.exit(load_entry_point('scitt-emulator', 'console_scripts', 'scitt-emulator')())
   File "/home/alice/Documents/python/scitt-api-emulator/scitt_emulator/cli.py", line 22, in main
     args.func(args)
-  File "/home/alice/Documents/python/scitt-api-emulator/scitt_emulator/client.py", line 190, in <lambda>
+  File "/home/alice/Documents/python/scitt-api-emulator/scitt_emulator/client.py", line 196, in <lambda>
     func=lambda args: submit_claim(
-  File "/home/alice/Documents/python/scitt-api-emulator/scitt_emulator/client.py", line 101, in submit_claim
+  File "/home/alice/Documents/python/scitt-api-emulator/scitt_emulator/client.py", line 107, in submit_claim
     raise_for_operation_status(operation)
-  File "/home/alice/Documents/python/scitt-api-emulator/scitt_emulator/client.py", line 37, in raise_for_operation_status
+  File "/home/alice/Documents/python/scitt-api-emulator/scitt_emulator/client.py", line 43, in raise_for_operation_status
     raise ClaimOperationError(operation)
-scitt_emulator.client.ClaimOperationError: Operation error: {'error': {'detail': '"\'did:web:example.com\' should not be valid under {\'enum\': [\'did:web:example.com\']}\\n\\nFailed validating \'not\' in schema[\'properties\'][\'issuer\']:\\n    {\'not\': {\'enum\': [\'did:web:example.com\']}, \'type\': \'string\'}\\n\\nOn instance[\'issuer\']:\\n    \'did:web:example.com\'\\n"', 'type': 'denied'}, 'operationId': '7bf1101b-ec10-409f-884a-a3747a270394', 'status': 'failed'}
+scitt_emulator.client.ClaimOperationError: Operation error denied: 'did:web:example.com' is not one of ['did:web:example.org']
+
+Failed validating 'enum' in schema['properties']['issuer']:
+    {'enum': ['did:web:example.org'], 'type': 'string'}
+
+On instance['issuer']:
+    'did:web:example.com'
+
 $ scitt-emulator client create-claim --issuer did:web:example.org --content-type application/json --payload '{"sun": "yellow"}' --out claim.cose
 Claim written to claim.cose
 $ scitt-emulator client submit-claim --claim claim.cose --out claim.receipt.cbor

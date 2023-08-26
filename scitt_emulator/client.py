@@ -22,7 +22,13 @@ class ClaimOperationError(Exception):
         self.operation = operation
 
     def __str__(self):
-        return f"Operation error: {self.operation}"
+        error_type = self.operation.get("error", {}).get(
+            "type", "error.type not present",
+        )
+        error_detail = self.operation.get("error", {}).get(
+            "detail", "error.detail not present",
+        )
+        return f"Operation error {error_type}: {error_detail}"
 
 
 def raise_for_status(response: httpx.Response):
