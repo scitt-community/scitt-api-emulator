@@ -88,6 +88,10 @@ class SimpleFileBasedPolicyEngine:
                     env = {
                         **os.environ,
                         "SCHEMA_PATH": str(config["schema_path"].resolve()),
+                        "PYTHONPATH": ":".join(
+                            os.environ.get("PYTHONPATH", "").split(":")
+                            + [str(pathlib.Path(__file__).parents[1].resolve())]
+                        ),
                     }
                     exit_code = 0
                     try:
