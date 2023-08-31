@@ -138,6 +138,7 @@ The `service_parameters.json` file gets created when starting a service using `.
     "serviceId": "emulator",
     "treeAlgorithm": "CCF",
     "signatureAlgorithm": "ES256",
+    "insertPolicy": "*",
     "serviceCertificate": "-----BEGIN CERTIFICATE-----..."
 }
 ```

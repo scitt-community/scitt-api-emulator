@@ -4,6 +4,7 @@
 from typing import Optional
 from abc import ABC, abstractmethod
 from pathlib import Path
+import contextlib
 import time
 import json
 import uuid
@@ -22,6 +23,10 @@ COSE_Headers_Service_Id = "service_id"
 COSE_Headers_Tree_Alg = "tree_alg"
 COSE_Headers_Issued_At = "issued_at"
 
+# permissive insert policy
+MOST_PERMISSIVE_INSERT_POLICY = "*"
+DEFAULT_INSERT_POLICY = MOST_PERMISSIVE_INSERT_POLICY
+
 
 class ClaimInvalidError(Exception):
     pass
@@ -32,6 +37,10 @@ class EntryNotFoundError(Exception):
 
 
 class OperationNotFoundError(Exception):
+    pass
+
+
+class PolicyResultDecodeError(Exception):
     pass
 
 
@@ -94,8 +103,14 @@ class SCITTServiceEmulator(ABC):
         return claim
 
     def submit_claim(self, claim: bytes, long_running=True) -> dict:
+        insert_policy = self.service_parameters.get("insertPolicy", DEFAULT_INSERT_POLICY)
+
         if long_running:
             return self._create_operation(claim)
+        elif insert_policy != MOST_PERMISSIVE_INSERT_POLICY:
+            raise NotImplementedError(
+                f"non-* insertPolicy only works with long_running=True: {insert_policy!r}"
+            )
         else:
             return self._create_entry(claim)
 
@@ -142,10 +157,56 @@ class SCITTServiceEmulator(ABC):
 
         return operation
 
+    def _sync_policy_result(self, operation: dict):
+        operation_id = operation["operationId"]
+        policy_insert_path = self.operations_path / f"{operation_id}.policy.insert"
+        policy_denied_path = self.operations_path / f"{operation_id}.policy.denied"
+        policy_failed_path = self.operations_path / f"{operation_id}.policy.failed"
+        insert_policy = self.service_parameters.get("insertPolicy", DEFAULT_INSERT_POLICY)
+
+        policy_result = {"status": operation["status"]}
+
+        if insert_policy == MOST_PERMISSIVE_INSERT_POLICY:
+            policy_result["status"] = "succeeded"
+        if policy_insert_path.exists():
+            policy_result["status"] = "succeeded"
+            policy_insert_path.unlink()
+        if policy_failed_path.exists():
+            policy_result["status"] = "failed"
+            if policy_failed_path.stat().st_size != 0:
+                try:
+                    policy_result_error = json.loads(policy_failed_path.read_text())
+                except Exception as error:
+                    raise PolicyResultDecodeError(operation_id) from error
+                policy_result["error"] = policy_result_error
+            policy_failed_path.unlink()
+        if policy_denied_path.exists():
+            policy_result["status"] = "denied"
+            if policy_denied_path.stat().st_size != 0:
+                try:
+                    policy_result_error = json.loads(policy_denied_path.read_text())
+                except Exception as error:
+                    raise PolicyResultDecodeError(operation_id) from error
+                policy_result["error"] = policy_result_error
+            policy_denied_path.unlink()
+
+        return policy_result
+
     def _finish_operation(self, operation: dict):
         operation_id = operation["operationId"]
         operation_path = self.operations_path / f"{operation_id}.json"
         claim_src_path = self.operations_path / f"{operation_id}.cose"
+
+        policy_result = self._sync_policy_result(operation)
+        if policy_result["status"] == "running":
+            return operation
+        if policy_result["status"] != "succeeded":
+            operation["status"] = "failed"
+            if "error" in policy_result:
+                operation["error"] = policy_result["error"]
+            operation_path.unlink()
+            claim_src_path.unlink()
+            return operation
 
         claim = claim_src_path.read_bytes()
         entry = self._create_entry(claim)

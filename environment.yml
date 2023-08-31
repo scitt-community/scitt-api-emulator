@@ -34,3 +34,5 @@ dependencies:
     - rkvst-archivist==0.20.0
     - six==1.16.0
     - urllib3<2.0.0
+    - myst-parser==1.0.0
+    - jsonschema==4.17.3
