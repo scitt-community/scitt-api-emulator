@@ -71,6 +71,9 @@ class SCITTServiceEmulator(ABC):
     def verify_receipt_contents(receipt_contents: list, countersign_tbi: bytes):
         raise NotImplementedError
 
+    def get_service_parameters(self) -> dict:
+        return self.service_parameters
+
     def get_operation(self, operation_id: str) -> dict:
         operation_path = self.operations_path / f"{operation_id}.json"
         try:

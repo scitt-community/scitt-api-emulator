@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 import os
+import json
 import threading
 import pytest
 from werkzeug.serving import make_server
@@ -85,6 +86,21 @@ def test_client_cli(use_lro: bool, tmp_path):
         execute_cli(command)
         assert os.path.exists(receipt_path)
         assert os.path.exists(entry_id_path)
+
+        # retrieve service parameters
+        original_service_parameters = json.loads(service.service_parameters_path.read_text())
+        service.service_parameters_path.unlink()
+        assert not service.service_parameters_path.exists()
+        command = [
+            "client",
+            "retrieve-service-parameters",
+            "--out",
+            service.service_parameters_path,
+            "--url",
+            service.url
+        ]
+        execute_cli(command)
+        assert original_service_parameters == json.loads(service.service_parameters_path.read_text())
 
         # verify receipt
         command = [

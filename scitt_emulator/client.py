@@ -151,6 +151,16 @@ def retrieve_receipt(url: str, entry_id: Path, receipt_path: Path, client: HttpC
     print(f"Receipt written to {receipt_path}")
 
 
+def retrieve_service_parameters(url: str, service_parameters_path: Path, client: HttpClient):
+    response = client.get(f"{url}/service-parameters")
+    service_parameters = response.content
+
+    with open(service_parameters_path, "wb") as f:
+        f.write(service_parameters)
+
+    print(f"Service parameters written to {service_parameters_path}")
+
+
 def verify_receipt(cose_path: Path, receipt_path: Path, service_parameters_path: Path):
     with open(service_parameters_path) as f:
         service_parameters = json.load(f)
@@ -223,6 +233,20 @@ def cli(fn):
     p.set_defaults(
         func=lambda args: retrieve_receipt(
             args.url, args.entry_id, args.out,
+            HttpClient(args.token, args.cacert)
+        )
+    )
+
+    p = sub.add_parser("retrieve-service-parameters", description="Retrieve SCITT service parameters")
+    p.add_argument(
+        "--out", required=True, type=Path, help="Path to write the service parameters to"
+    )
+    p.add_argument("--url", required=False, default=DEFAULT_URL)
+    p.add_argument("--token", help="Bearer token to authenticate with")
+    p.add_argument("--cacert", type=Path, help="CA certificate to verify host against")
+    p.set_defaults(
+        func=lambda args: retrieve_service_parameters(
+            args.url, args.out,
             HttpClient(args.token, args.cacert)
         )
     )

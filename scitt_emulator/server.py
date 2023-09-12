@@ -6,7 +6,7 @@ from pathlib import Path
 from io import BytesIO
 import random
 
-from flask import Flask, request, send_file, make_response
+from flask import Flask, request, send_file, make_response, jsonify
 
 from scitt_emulator.tree_algs import TREE_ALGS
 from scitt_emulator.scitt import EntryNotFoundError, ClaimInvalidError, OperationNotFoundError
@@ -51,6 +51,12 @@ def create_flask_app(config):
 
     def is_unavailable():
         return random.random() <= error_rate
+
+    @app.route("/service-parameters", methods=["GET"])
+    def get_service_parameters():
+        if is_unavailable():
+            return make_unavailable_error()
+        return jsonify(app.scitt_service.get_service_parameters())
 
     @app.route("/entries/<string:entry_id>/receipt", methods=["GET"])
     def get_receipt(entry_id: str):
