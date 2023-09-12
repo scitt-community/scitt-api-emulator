@@ -16,16 +16,23 @@ def execute_cli(argv):
 
 
 class Service:
-    def __init__(self, config):
+    def __init__(self, config, create_flask_app=None):
         self.config = config
+        self.create_flask_app = (
+            create_flask_app
+            if create_flask_app is not None
+            else server.create_flask_app
+        )
 
     def __enter__(self):
-        app = server.create_flask_app(self.config)
-        self.service_parameters_path = app.service_parameters_path
-        host = "127.0.0.1"
-        self.server = make_server(host, 0, app)
+        app = self.create_flask_app(self.config)
+        if hasattr(app, "service_parameters_path"):
+            self.service_parameters_path = app.service_parameters_path
+        self.host = "127.0.0.1"
+        self.server = make_server(self.host, 0, app)
         port = self.server.port
-        self.url = f"http://{host}:{port}"
+        self.url = f"http://{self.host}:{port}"
+        app.url = self.url
         self.thread = threading.Thread(name="server", target=self.server.serve_forever)
         self.thread.start()
         return self
