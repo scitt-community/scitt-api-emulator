@@ -21,4 +21,10 @@ setup(
         "flask",
         "rkvst-archivist"
     ],
+    extras_require={
+        "oidc": [
+            "PyJWT",
+            "jwcrypto",
+        ]
+    },
 )
