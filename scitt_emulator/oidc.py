@@ -3,6 +3,7 @@
 import jwt
 import json
 import jwcrypto.jwk
+import jsonschema
 from flask import jsonify
 from werkzeug.wrappers import Request
 from scitt_emulator.client import HttpClient
@@ -27,7 +28,9 @@ class OIDCAuthMiddleware:
 
     def __call__(self, environ, start_response):
         request = Request(environ)
-        self.validate_token(request.headers["Authorization"].replace("Bearer ", ""))
+        claims = self.validate_token(request.headers["Authorization"].replace("Bearer ", ""))
+        if "claim_schema" in self.config and claims["iss"] in self.config["claim_schema"]:
+            jsonschema.validate(claims, schema=self.config["claim_schema"][claims["iss"]])
         return self.app(environ, start_response)
 
     def validate_token(self, token):

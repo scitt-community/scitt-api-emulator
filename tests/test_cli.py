@@ -203,6 +203,7 @@ def test_client_cli_token(tmp_path):
     key = jwcrypto.jwk.JWK.generate(kty="RSA", size=2048)
     algorithm = "RS256"
     audience = "scitt.example.org"
+    subject = "repo:scitt-community/scitt-api-emulator:ref:refs/heads/main"
 
     with Service(
         {"key": key, "algorithms": [algorithm]},
@@ -213,7 +214,21 @@ def test_client_cli_token(tmp_path):
         )
         middleware_config_path = tmp_path / "oidc-middleware-config.json"
         middleware_config_path.write_text(
-            json.dumps({"issuers": [oidc_service.url], "audience": audience})
+            json.dumps(
+                {
+                    "issuers": [oidc_service.url],
+                    "audience": audience,
+                    "claim_schema": {
+                        oidc_service.url: {
+                            "$schema": "https://json-schema.org/draft/2020-12/schema",
+                            "required": ["sub"],
+                            "properties": {
+                                "sub": {"type": "string", "enum": [subject]},
+                            },
+                        }
+                    },
+                }
+            )
         )
         with Service(
             {
@@ -263,18 +278,36 @@ def test_client_cli_token(tmp_path):
             assert not os.path.exists(receipt_path)
             assert not os.path.exists(entry_id_path)
 
-            # create token
+            # create token without subject
             token = jwt.encode(
                 {"iss": oidc_service.url, "aud": audience},
                 key.export_to_pem(private_key=True, password=None),
                 algorithm=algorithm,
                 headers={"kid": key.thumbprint()},
             )
-            # submit claim with token
+            # submit claim with token lacking subject
             command += [
                 "--token",
                 token,
             ]
+            check_error = None
+            try:
+                execute_cli(command)
+            except Exception as error:
+                check_error = error
+            assert check_error
+            assert not os.path.exists(receipt_path)
+            assert not os.path.exists(entry_id_path)
+
+            # create token with subject
+            token = jwt.encode(
+                {"iss": oidc_service.url, "aud": audience, "sub": subject},
+                key.export_to_pem(private_key=True, password=None),
+                algorithm=algorithm,
+                headers={"kid": key.thumbprint()},
+            )
+            # submit claim with token containing subject
+            command[-1] = token
             execute_cli(command)
             assert os.path.exists(receipt_path)
             assert os.path.exists(entry_id_path)

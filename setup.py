@@ -25,6 +25,7 @@ setup(
         "oidc": [
             "PyJWT",
             "jwcrypto",
+            "jsonschema",
         ]
     },
 )
