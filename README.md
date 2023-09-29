@@ -4,16 +4,19 @@ This repository contains the source code for the SCITT API interoperability clie
 
 It is meant to allow experimenting with [SCITT](https://datatracker.ietf.org/wg/scitt/about/) APIs and formats and proving interoperability of implementations.
 
-Note the SCITT standards are not yet fully published and are subject to change. This repository aims to keep up with changes to the WG output as faithfully as possible but in the event of inconsistencies between this and the IETF WG documents, the IETF documents are primary.
+Note the SCITT standards are not yet fully published and are subject to change.
+This repository aims to keep up with changes to the WG output as faithfully as possible but in the event of inconsistencies between this and the IETF WG documents, the IETF documents are primary.
 
 ## Prerequisites
 
-The emulator assumes a Linux environment with Python 3.8 or higher.
+The emulator assumes a Linux environment with Python 3.10 or higher.
 On Ubuntu, run the following to install Python:
 
 ```sh
-sudo apt install python3.8 python3.8-venv
+sudo apt install python3.10-venv
 ```
+
+### Optional Dependencies
 
 If you want to use conda, first install it:
 
@@ -28,23 +31,17 @@ conda activate scitt
 
 ## Clone the Emulator
 
-Clone the scitt-api-emulator repository and change into the scitt-api-emulator folder:
+1. Clone the scitt-api-emulator repository and change into the scitt-api-emulator folder:
 
-```sh
-git clone https://github.com/scitt-community/scitt-api-emulator.git
-```
+    ```sh
+    git clone https://github.com/scitt-community/scitt-api-emulator.git
+    ```
 
-or for ssh:
+1. Move into the emulator director to utilize the local commands
 
-```sh
-git clone git@github.com:scitt-community/scitt-api-emulator.git
-```
-
-then:
-
-```sh
-cd scitt-api-emulator
-```
+    ```sh
+    cd scitt-api-emulator
+    ```
 
 ## Start the Proxy Server
 
@@ -53,60 +50,89 @@ The proxy server supports 2 options currently:
 - 'CCF' uses the emulator server to create and verify receipts using the CCF tree algorithm
 - 'RKVST' uses the RKVST production SaaS server to create and verify  receipts using native Merkle trees
 
-Note the emulated is for experimentation only and not recommended for production use.
+**Note:** _the emulator is for experimentation only and not recommended for production use._
 
 ### Start a Fake Emulated SCITT Service
 
-```sh
-./scitt-emulator.sh server --workspace workspace/ --tree-alg CCF
-```
+1. Start the service, under the `/workspace` directory, using CCF
+
+    ```sh
+    ./scitt-emulator.sh server --workspace workspace/ --tree-alg CCF
+    ```
+
+1. The server is running at http://localhost:8000/ and uses the `/workspace` folder to store the service parameters and service state  
+  **Note:** _The default port is `8000` but can be changed with the `--port` argument._
+1. Start another shell to run the test scripts, leaving the above shell for diagnostic output
+1. Skip to [Create Claims](#create-claims)
+
 
 ### Start an RKVST SCITT Proxy Service
 
-```sh
-./scitt-emulator.sh server --workspace workspace/ --tree-alg RKVST
-```
+1. Start the service, under the `/workspace` directory, using RKVST  
+  The default port is `8000` but can be changed with the `--port` argument.
 
-The default port is 8000 but can be changed with the `--port` argument.
+    ```sh
+    ./scitt-emulator.sh server --workspace workspace/ --tree-alg RKVST
+    ```
 
-Now the server is running at http://localhost:8000/ and uses `workspace/` to store the service parameters and service state.
+### Executing Commands
 
 The service has the following REST API:
 
-- `POST /entries` - submit a COSE_Sign1 claim to the emulator and return an entry id
+- `POST /entries` submit a COSE_Sign1 claim as HTTP body, with a JSON response containing `"entry_id"`
 - `GET /entries/<entry_id>` - retrieve the COSE_Sign1 claim for the corresponding entry id
-- `GET /entries/<entry_id>/receipt` - retrieve the SCITT receipt for corresponding entry id
+- `GET /entries/<entry_id>/receipt` to retrieve the SCITT receipt.
 
 The following steps should be done from a different terminal, leaving the service running in the background.
 
 ### Create Claims
 
-```sh
-./scitt-emulator.sh client create-claim --issuer did:web:example.com --content-type application/json --payload '{"sun": "yellow"}' --out claim.cose
-```
+1. Create a signed `json` claim with the payload: `{"sun": "yellow"}`, saving the formatted output to `claim.cose`
 
-Note: The emulator does not verify claim signatures and generates an ad-hoc key pair to sign the claim.
+    ```sh
+    ./scitt-emulator.sh client create-claim \
+        --issuer did:web:example.com \
+        --content-type application/json \
+        --payload '{"sun": "yellow"}' \
+        --out claim.cose
+    ```
+
+    _**Note:** The emulator generates an ad-hoc key pair to sign the claim and does not verify claim signatures upon submission._
+
+2. View the signed claim by uploading `claim.cose` to one of the [CBOR or COSE Debugging Tools](#cose-and-cbor-debugging)
 
 ### Submit Claims and Retrieve Receipts
 
-```sh
-./scitt-emulator.sh client submit-claim --claim claim.cose --out claim.receipt.cbor
-```
+1. Submit the Signed Claim
 
-The `submit-claim` command uses the default service URL `http://127.0.0.1:8000` which can be changed with the `--url` argument. It can be used with the built-in server or an external service implementation.
+    ```sh
+    ./scitt-emulator.sh client submit-claim \
+        --claim claim.cose \
+        --out claim.receipt.cbor
+    ```
 
-This command sends the following two requests:
+1. View the response, noting the `Entry ID` value
 
-1. `POST /entries` with the claim file as HTTP body. The response is JSON containing `"entry_id"`.
-2. `GET /entries/<entry_id>/receipt` to retrieve the SCITT receipt.
+    ```output
+    Claim Registered:
+        json:     {'entryId': '1'}
+        Entry ID: 1
+        Receipt:  ./claim.receipt.cbor
+    ```
+
+**Note:** The `submit-claim` command uses the default service URL `http://127.0.0.1:8000` which can be changed with the `--url` argument.
+It can be used with the built-in server or an external service implementation.
 
 ### Retrieve Claims
 
+1. Replace the `<entryId>` with the value from the `submit-claim` command above
+
 ```sh
-./scitt-emulator.sh client retrieve-claim --entry-id 123 --out claim.cose
+./scitt-emulator.sh client retrieve-claim --entry-id <entryId> --out claim.cose
 ```
 
-The `retrieve-claim` command uses the default service URL `http://127.0.0.1:8000` which can be changed with the `--url` argument. It can be used with the built-in server or an external service implementation.
+**Note:** The `retrieve-claim` command uses the default service URL `http://127.0.0.1:8000` which can be changed with the `--url` argument.
+It can be used with the built-in server or an external service implementation.
 
 This command sends the following request:
 
@@ -118,7 +144,8 @@ This command sends the following request:
 ./scitt-emulator.sh client retrieve-receipt --entry-id 123 --out receipt.cbor
 ```
 
-The `retrieve-receipt` command uses the default service URL `http://127.0.0.1:8000` which can be changed with the `--url` argument. It can be used with the built-in server or an external service implementation.
+The `retrieve-receipt` command uses the default service URL `http://127.0.0.1:8000` which can be changed with the `--url` argument.
+It can be used with the built-in server or an external service implementation.
 
 This command sends the following request:
 
@@ -127,12 +154,17 @@ This command sends the following request:
 ### Validate Receipts
 
 ```sh
-./scitt-emulator.sh client verify-receipt --claim claim.cose --receipt claim.receipt.cbor --service-parameters workspace/service_parameters.json
+./scitt-emulator.sh client verify-receipt \
+    --claim claim.cose \
+    --receipt claim.receipt.cbor \
+    --service-parameters workspace/service_parameters.json
 ```
 
-The `verify-receipt` command verifies a SCITT receipt given a SCITT claim and a service parameters file. This command can be used to verify receipts generated by other implementations.
+The `verify-receipt` command verifies a SCITT receipt given a SCITT claim and a service parameters file.
+This command can be used to verify receipts generated by other implementations.
 
-The `service_parameters.json` file gets created when starting a service using `./scitt-emulator.sh server`. The format of this file is not standardized and is currently:
+The `workspace/service_parameters.json` file gets created when starting a service using `./scitt-emulator.sh server`.
+The format of this file is not standardized and is currently:
 
 ```json
 {
@@ -146,20 +178,30 @@ The `service_parameters.json` file gets created when starting a service using `.
 
 `"signatureAlgorithm"` and `"serviceCertificate"` are additional parameters specific to the [`CCF` tree algorithm](https://ietf-scitt.github.io/draft-birkholz-scitt-receipts/draft-birkholz-scitt-receipts.html#name-additional-parameters).
 
+To view the file:
+
+```sh
+cat workspace/service_parameters.json | jq
+```
+
 ### COSE and CBOR Debugging
 
 The following websites can be used to inspect COSE and CBOR files:
 
-- https://gluecose.github.io/cose-viewer/
-- https://cbor.me/
+- [gluecose.github.io/cose-viewer](https://gluecose.github.io/cose-viewer/)
+- [cbor.me](https://cbor.me/)
 
 ## Code Structure
 
 `scitt_emulator/scitt.py` contains the core SCITT algorithms that are agnostic of a specific tree algorithm.
 
-`scitt_emulator/ccf.py` is the implementation of the [CCF tree algorithm](https://ietf-scitt.github.io/draft-birkholz-scitt-receipts/draft-birkholz-scitt-receipts.html#name-ccf-tree-algorithm). For each claim, a receipt is generated using a fake but valid Merkle tree that is independent of other submitted claims. A real CCF service would maintain a single Merkle tree covering all submitted claims and auxiliary entries.
+`scitt_emulator/ccf.py` is the implementation of the [CCF tree algorithm](https://ietf-scitt.github.io/draft-birkholz-scitt-receipts/draft-birkholz-scitt-receipts.html#name-ccf-tree-algorithm).
+For each claim, a receipt is generated using a fake but valid Merkle tree that is independent of other submitted claims.
+A real CCF service would maintain a single Merkle tree covering all submitted claims and auxiliary entries.
 
-`scitt_emulator/rkvst.py` is a simple REST proxy that takes SCITT standard API calls and routes them through to the [RKVST production SaaS service](https://app.rkvst.io). Each claim is stored in a Merkle tree underpinning a Quorum blockchain and  receipts contain valid, verifiable inclusion proofs for the claim in that Merkle proof. [More docs on receipts here](https://docs.rkvst.com/platform/overview/scitt-receipts/).
+`scitt_emulator/rkvst.py` is a simple REST proxy that takes SCITT standard API calls and routes them through to the [RKVST production SaaS service](https://app.rkvst.io). 
+Each claim is stored in a Merkle tree underpinning a Quorum blockchain and  receipts contain valid, verifiable inclusion proofs for the claim in that Merkle proof.
+[More docs on receipts here](https://docs.rkvst.com/platform/overview/scitt-receipts/).
 
 `scitt_emulator/server.py` is a simple Flask server that acts as a SCITT transparency service.
 
