@@ -1,8 +1,8 @@
-# SCITT API interoperability client
+# SCITT API Interoperability Client
 
 This repository contains the source code for the SCITT API interoperability client and sample emulator.
 
-It is meant to allow experimenting with [SCITT](https://datatracker.ietf.org/wg/scitt/about/) APIs and formats and proving interoperability of implementations. 
+It is meant to allow experimenting with [SCITT](https://datatracker.ietf.org/wg/scitt/about/) APIs and formats and proving interoperability of implementations.
 
 Note the SCITT standards are not yet fully published and are subject to change. This repository aims to keep up with changes to the WG output as faithfully as possible but in the event of inconsistencies between this and the IETF WG documents, the IETF documents are primary.
 
@@ -15,7 +15,6 @@ On Ubuntu, run the following to install Python:
 sudo apt install python3.8 python3.8-venv
 ```
 
-
 If you want to use conda, first install it:
 
 - [Install Conda](https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html)
@@ -27,44 +26,46 @@ conda env create -f environment.yml
 conda activate scitt
 ```
 
-## Clone the emulator
+## Clone the Emulator
 
 Clone the scitt-api-emulator repository and change into the scitt-api-emulator folder:
 
 ```sh
 git clone https://github.com/scitt-community/scitt-api-emulator.git
 ```
+
 or for ssh:
 
 ```sh
 git clone git@github.com:scitt-community/scitt-api-emulator.git
 ```
+
 then:
 
 ```sh
 cd scitt-api-emulator
 ```
 
-## Start the proxy server
+## Start the Proxy Server
 
 The proxy server supports 2 options currently:
- - 'CCF' uses the emulator server to create and verify receipts using the CCF tree algorithm
- - 'RKVST' uses the RKVST production SaaS server to create and verify  receipts using native Merkle trees
+
+- 'CCF' uses the emulator server to create and verify receipts using the CCF tree algorithm
+- 'RKVST' uses the RKVST production SaaS server to create and verify  receipts using native Merkle trees
 
 Note the emulated is for experimentation only and not recommended for production use.
 
-### Start a fake emulated SCITT service
+### Start a Fake Emulated SCITT Service
 
 ```sh
 ./scitt-emulator.sh server --workspace workspace/ --tree-alg CCF
 ```
 
-### Start an RKVST SCITT proxy service
+### Start an RKVST SCITT Proxy Service
 
 ```sh
 ./scitt-emulator.sh server --workspace workspace/ --tree-alg RKVST
 ```
-
 
 The default port is 8000 but can be changed with the `--port` argument.
 
@@ -78,7 +79,7 @@ The service has the following REST API:
 
 The following steps should be done from a different terminal, leaving the service running in the background.
 
-### Create claims
+### Create Claims
 
 ```sh
 ./scitt-emulator.sh client create-claim --issuer did:web:example.com --content-type application/json --payload '{"sun": "yellow"}' --out claim.cose
@@ -86,7 +87,7 @@ The following steps should be done from a different terminal, leaving the servic
 
 Note: The emulator does not verify claim signatures and generates an ad-hoc key pair to sign the claim.
 
-### Submit claims and retrieve receipts
+### Submit Claims and Retrieve Receipts
 
 ```sh
 ./scitt-emulator.sh client submit-claim --claim claim.cose --out claim.receipt.cbor
@@ -99,7 +100,7 @@ This command sends the following two requests:
 1. `POST /entries` with the claim file as HTTP body. The response is JSON containing `"entry_id"`.
 2. `GET /entries/<entry_id>/receipt` to retrieve the SCITT receipt.
 
-### Retrieve claims
+### Retrieve Claims
 
 ```sh
 ./scitt-emulator.sh client retrieve-claim --entry-id 123 --out claim.cose
@@ -111,7 +112,7 @@ This command sends the following request:
 
 - `GET /entries/<entry_id>` to retrieve the claim.
 
-### Retrieve receipts
+### Retrieve Receipts
 
 ```sh
 ./scitt-emulator.sh client retrieve-receipt --entry-id 123 --out receipt.cbor
@@ -123,7 +124,7 @@ This command sends the following request:
 
 - `GET /entries/<entry_id>/receipt` to retrieve the receipt.
 
-### Validate receipts 
+### Validate Receipts
 
 ```sh
 ./scitt-emulator.sh client verify-receipt --claim claim.cose --receipt claim.receipt.cbor --service-parameters workspace/service_parameters.json
@@ -145,18 +146,18 @@ The `service_parameters.json` file gets created when starting a service using `.
 
 `"signatureAlgorithm"` and `"serviceCertificate"` are additional parameters specific to the [`CCF` tree algorithm](https://ietf-scitt.github.io/draft-birkholz-scitt-receipts/draft-birkholz-scitt-receipts.html#name-additional-parameters).
 
-### COSE and CBOR debugging
+### COSE and CBOR Debugging
 
 The following websites can be used to inspect COSE and CBOR files:
 
 - https://gluecose.github.io/cose-viewer/
 - https://cbor.me/
 
-## Code structure
+## Code Structure
 
 `scitt_emulator/scitt.py` contains the core SCITT algorithms that are agnostic of a specific tree algorithm.
 
-`scitt_emulator/ccf.py` is the implementation of the [CCF tree algorithm](https://ietf-scitt.github.io/draft-birkholz-scitt-receipts/draft-birkholz-scitt-receipts.html#name-ccf-tree-algorithm). For each claim, a receipt is generated using a fake but valid Merkle tree that is independent of other submitted claims. A real CCF service would maintain a single Merkle tree covering all submitted claims and auxiliarly entries.
+`scitt_emulator/ccf.py` is the implementation of the [CCF tree algorithm](https://ietf-scitt.github.io/draft-birkholz-scitt-receipts/draft-birkholz-scitt-receipts.html#name-ccf-tree-algorithm). For each claim, a receipt is generated using a fake but valid Merkle tree that is independent of other submitted claims. A real CCF service would maintain a single Merkle tree covering all submitted claims and auxiliary entries.
 
 `scitt_emulator/rkvst.py` is a simple REST proxy that takes SCITT standard API calls and routes them through to the [RKVST production SaaS service](https://app.rkvst.io). Each claim is stored in a Merkle tree underpinning a Quorum blockchain and  receipts contain valid, verifiable inclusion proofs for the claim in that Merkle proof. [More docs on receipts here](https://docs.rkvst.com/platform/overview/scitt-receipts/).
 
@@ -166,9 +167,9 @@ The following websites can be used to inspect COSE and CBOR files:
 
 In order to add a new tree algorithm, a file like `scitt_emulator/ccf.py` must be created and the containing class be added in `scitt_emulator/tree_algs.py`.
 
-## Run tests
+## Run Tests
 
-```
+```bash
 ./run-tests.sh
 ```
 
