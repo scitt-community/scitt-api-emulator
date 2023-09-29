@@ -65,7 +65,6 @@ The proxy server supports 2 options currently:
 1. Start another shell to run the test scripts, leaving the above shell for diagnostic output
 1. Skip to [Create Claims](#create-claims)
 
-
 ### Start an RKVST SCITT Proxy Service
 
 1. Start the service, under the `/workspace` directory, using RKVST  
@@ -83,9 +82,10 @@ The service has the following REST API:
 - `GET /entries/<entry_id>` - retrieve the COSE_Sign1 claim for the corresponding entry id
 - `GET /entries/<entry_id>/receipt` to retrieve the SCITT receipt.
 
-The following steps should be done from a different terminal, leaving the service running in the background.
+**Note:** The `submit-claim` and `retrieve-claim` commands use the default service URL `http://127.0.0.1:8000` which can be changed with the `--url` argument.
+They can be used with the built-in server or an external service implementation.
 
-### Create Claims
+### Create Signed Claims
 
 1. Create a signed `json` claim with the payload: `{"sun": "yellow"}`, saving the formatted output to `claim.cose`
 
@@ -120,19 +120,21 @@ The following steps should be done from a different terminal, leaving the servic
         Receipt:  ./claim.receipt.cbor
     ```
 
-**Note:** The `submit-claim` command uses the default service URL `http://127.0.0.1:8000` which can be changed with the `--url` argument.
-It can be used with the built-in server or an external service implementation.
+1. Save the entryId to an environment variable
+
+   ```sh
+   ENTRY_ID=<entryId>
+   ```
 
 ### Retrieve Claims
 
-1. Replace the `<entryId>` with the value from the `submit-claim` command above
+1. Retrieve the claim, based on the ENTRY_ID set from the `submit-claim` command above
 
 ```sh
-./scitt-emulator.sh client retrieve-claim --entry-id <entryId> --out claim.cose
+./scitt-emulator.sh client retrieve-claim \
+  --entry-id $ENTRY_ID \
+  --out claim.cose
 ```
-
-**Note:** The `retrieve-claim` command uses the default service URL `http://127.0.0.1:8000` which can be changed with the `--url` argument.
-It can be used with the built-in server or an external service implementation.
 
 This command sends the following request:
 
@@ -140,9 +142,13 @@ This command sends the following request:
 
 ### Retrieve Receipts
 
-```sh
-./scitt-emulator.sh client retrieve-receipt --entry-id 123 --out receipt.cbor
-```
+1. Replace the `<entryId>` with the value from the `submit-claim` command above
+
+    ```sh
+    ./scitt-emulator.sh client retrieve-receipt \
+        --entry-id $ENTRY_ID \
+        --out receipt.cbor
+    ```
 
 The `retrieve-receipt` command uses the default service URL `http://127.0.0.1:8000` which can be changed with the `--url` argument.
 It can be used with the built-in server or an external service implementation.
@@ -199,7 +205,7 @@ The following websites can be used to inspect COSE and CBOR files:
 For each claim, a receipt is generated using a fake but valid Merkle tree that is independent of other submitted claims.
 A real CCF service would maintain a single Merkle tree covering all submitted claims and auxiliary entries.
 
-`scitt_emulator/rkvst.py` is a simple REST proxy that takes SCITT standard API calls and routes them through to the [RKVST production SaaS service](https://app.rkvst.io). 
+`scitt_emulator/rkvst.py` is a simple REST proxy that takes SCITT standard API calls and routes them through to the [RKVST production SaaS service](https://app.rkvst.io).
 Each claim is stored in a Merkle tree underpinning a Quorum blockchain and  receipts contain valid, verifiable inclusion proofs for the claim in that Merkle proof.
 [More docs on receipts here](https://docs.rkvst.com/platform/overview/scitt-receipts/).
 
