@@ -1,4 +1,4 @@
-# Testing the SCITT Emulator with Postman.
+# Testing the SCITT Emulator with Postman
 
 - [Install Postman](https://www.postman.com/downloads/)
 - [Install Newman](https://support.postman.com/hc/en-us/articles/115003703325-How-to-install-Newman)

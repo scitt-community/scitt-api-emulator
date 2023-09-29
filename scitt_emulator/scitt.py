@@ -131,8 +131,8 @@ class SCITTServiceEmulator(ABC):
         claim_path = self.storage_path / f"{entry_id}.cose"
         claim_path.write_bytes(claim)
 
-        print(f"Claim written to {claim_path}")
-
+        print(f"A COSE signed Claim was written to:  {claim_path}")
+    
         entry = {"entryId": entry_id}
         return entry
     
@@ -153,7 +153,7 @@ class SCITTServiceEmulator(ABC):
             f.write(claim)
         
         print(f"Operation {operation_id} created")
-        print(f"Claim written to {claim_path}")
+        print(f"A COSE signed Claim was written to:  {claim_path}")
 
         return operation
 
@@ -323,7 +323,7 @@ def create_claim(claim_path: Path, issuer: str, content_type: str, payload: str)
 
     with open(claim_path, "wb") as f:
         f.write(claim)
-    print(f"Claim written to {claim_path}")
+    print(f"A COSE signed Claim was written to:  {claim_path}")
 
 
 def create_countersign_to_be_included(

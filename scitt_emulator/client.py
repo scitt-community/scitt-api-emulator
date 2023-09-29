@@ -11,8 +11,6 @@ import httpx
 import scitt_emulator.scitt as scitt
 from scitt_emulator.tree_algs import TREE_ALGS
 
-import os
-
 DEFAULT_URL = "http://127.0.0.1:8000"
 CONNECT_RETRIES = 3
 HTTP_RETRIES = 3
@@ -145,7 +143,7 @@ def retrieve_claim(url: str, entry_id: Path, claim_path: Path, client: HttpClien
     with open(claim_path, "wb") as f:
         f.write(claim)
 
-    print(f"Claim written to {claim_path}")
+    print(f"A COSE signed Claim was written to: {claim_path}")
 
 
 def retrieve_receipt(url: str, entry_id: Path, receipt_path: Path, client: HttpClient):
