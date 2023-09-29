@@ -11,6 +11,8 @@ import httpx
 import scitt_emulator.scitt as scitt
 from scitt_emulator.tree_algs import TREE_ALGS
 
+import os
+
 DEFAULT_URL = "http://127.0.0.1:8000"
 CONNECT_RETRIES = 3
 HTTP_RETRIES = 3
@@ -89,6 +91,9 @@ def submit_claim(
     # Submit claim
     response = client.post(f"{url}/entries", content=claim, headers={
         "Content-Type": "application/cose"})
+
+    post_response=response.json()
+
     if response.status_code == 201:
         entry = response.json()
         entry_id = entry["entryId"]
@@ -115,13 +120,15 @@ def submit_claim(
     response = client.get(f"{url}/entries/{entry_id}/receipt", timeout=15)
     receipt = response.content
 
-    print(f"Claim registered with entry ID {entry_id}")
+    print("Claim Registered:")
+    print(f"  json:     {post_response}")
+    print(f"  Entry ID: {entry_id}")
 
     # Save receipt to file
     with open(receipt_path, "wb") as f:
         f.write(receipt)
 
-    print(f"Receipt written to {receipt_path}")
+    print(f"  Receipt:  ./{receipt_path}")
 
     # Save entry ID to file
     if entry_id_path:
