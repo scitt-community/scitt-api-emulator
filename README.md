@@ -206,7 +206,7 @@ For each claim, a receipt is generated using a fake but valid Merkle tree that i
 A real CCF service would maintain a single Merkle tree covering all submitted claims and auxiliary entries.
 
 `scitt_emulator/rkvst.py` is a simple REST proxy that takes SCITT standard API calls and routes them through to the [RKVST production SaaS service](https://app.rkvst.io).
-Each claim is stored in a Merkle tree underpinning a Quorum blockchain and  receipts contain valid, verifiable inclusion proofs for the claim in that Merkle proof.
+Each claim is stored in a Merkle tree underpinning a Quorum blockchain and receipts contain valid, verifiable inclusion proofs for the claim in that Merkle proof.
 [More docs on receipts here](https://docs.rkvst.com/platform/overview/scitt-receipts/).
 
 `scitt_emulator/server.py` is a simple Flask server that acts as a SCITT transparency service.
