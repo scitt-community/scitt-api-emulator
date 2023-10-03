@@ -60,7 +60,7 @@ The proxy server supports 2 options currently:
     ./scitt-emulator.sh server --workspace workspace/ --tree-alg CCF
     ```
 
-1. The server is running at http://localhost:8000/ and uses the `/workspace` folder to store the service parameters and service state  
+1. The server is running at http://localhost:8000/ and uses the `workspace/` folder to store the service parameters and service state  
   **Note:** _The default port is `8000` but can be changed with the `--port` argument._
 1. Start another shell to run the test scripts, leaving the above shell for diagnostic output
 1. Skip to [Create Claims](#create-claims)
