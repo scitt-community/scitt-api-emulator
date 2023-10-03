@@ -154,7 +154,7 @@ Create claim from allowed issuer (`.org`) and from non-allowed (`.com`).
 
 ```console
 $ scitt-emulator client create-claim --issuer did:web:example.com --content-type application/json --payload '{"sun": "yellow"}' --out claim.cose
-A COSE signed Claim was written to:  claim.cose
+A COSE-signed Claim was written to:  claim.cose
 $ scitt-emulator client submit-claim --claim claim.cose --out claim.receipt.cbor
 Traceback (most recent call last):
   File "/home/alice/.local/bin/scitt-emulator", line 33, in <module>
