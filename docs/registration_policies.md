@@ -140,21 +140,21 @@ echo ${CLAIM_PATH}
 Example running allowlist check and enforcement.
 
 ```console
-$ npm install -g nodemon
-$ nodemon -e .cose --exec 'find workspace/storage/operations -name \*.cose -exec nohup sh -xe policy_engine.sh $(cat workspace/service_parameters.json | jq -r .insertPolicy) {} \;'
+npm install -g nodemon
+nodemon -e .cose --exec 'find workspace/storage/operations -name \*.cose -exec nohup sh -xe policy_engine.sh $(cat workspace/service_parameters.json | jq -r .insertPolicy) {} \;'
 ```
 
 Also ensure you restart the server with the new config we edited.
 
 ```console
-$ scitt-emulator server --workspace workspace/ --tree-alg CCF --use-lro
+scitt-emulator server --workspace workspace/ --tree-alg CCF --use-lro
 ```
 
 Create claim from allowed issuer (`.org`) and from non-allowed (`.com`).
 
 ```console
 $ scitt-emulator client create-claim --issuer did:web:example.com --content-type application/json --payload '{"sun": "yellow"}' --out claim.cose
-Claim written to claim.cose
+A COSE-signed Claim was written to:  claim.cose
 $ scitt-emulator client submit-claim --claim claim.cose --out claim.receipt.cbor
 Traceback (most recent call last):
   File "/home/alice/.local/bin/scitt-emulator", line 33, in <module>
@@ -176,7 +176,7 @@ On instance['issuer']:
     'did:web:example.com'
 
 $ scitt-emulator client create-claim --issuer did:web:example.org --content-type application/json --payload '{"sun": "yellow"}' --out claim.cose
-Claim written to claim.cose
+A COSE signed Claim was written to:  claim.cose
 $ scitt-emulator client submit-claim --claim claim.cose --out claim.receipt.cbor
 Claim registered with entry ID 1
 Receipt written to claim.receipt.cbor

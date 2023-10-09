@@ -89,6 +89,9 @@ def submit_claim(
     # Submit claim
     response = client.post(f"{url}/entries", content=claim, headers={
         "Content-Type": "application/cose"})
+
+    post_response=response.json()
+
     if response.status_code == 201:
         entry = response.json()
         entry_id = entry["entryId"]
@@ -115,13 +118,15 @@ def submit_claim(
     response = client.get(f"{url}/entries/{entry_id}/receipt", timeout=15)
     receipt = response.content
 
-    print(f"Claim registered with entry ID {entry_id}")
+    print("Claim Registered:")
+    print(f"  json:     {post_response}")
+    print(f"  Entry ID: {entry_id}")
 
     # Save receipt to file
     with open(receipt_path, "wb") as f:
         f.write(receipt)
 
-    print(f"Receipt written to {receipt_path}")
+    print(f"  Receipt:  ./{receipt_path}")
 
     # Save entry ID to file
     if entry_id_path:
@@ -138,7 +143,7 @@ def retrieve_claim(url: str, entry_id: Path, claim_path: Path, client: HttpClien
     with open(claim_path, "wb") as f:
         f.write(claim)
 
-    print(f"Claim written to {claim_path}")
+    print(f"A COSE signed Claim was written to: {claim_path}")
 
 
 def retrieve_receipt(url: str, entry_id: Path, receipt_path: Path, client: HttpClient):
