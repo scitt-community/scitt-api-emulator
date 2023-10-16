@@ -35,6 +35,11 @@ setup(
             "PyJWT",
             "jwcrypto",
             "jsonschema",
-        ]
+        ],
+        "federation-activitypub-bovine": [
+            "bovine",
+            "bovine-tool",
+            "mechanical-bull",
+        ],
     },
 )
