@@ -47,8 +47,18 @@ def create_flask_app(config):
 
     clazz = TREE_ALGS[app.config["tree_alg"]]
 
+    federation = None
+    if app.config.get("federation", None):
+        federation = app.config["federation"](
+            config_path=app.config.get("federation_config_path", None),
+            storage_path=storage_path,
+            service_parameters_path=app.service_parameters_path
+        )
+
     app.scitt_service = clazz(
-        storage_path=storage_path, service_parameters_path=app.service_parameters_path
+        storage_path=storage_path,
+        service_parameters_path=app.service_parameters_path,
+        federation=federation,
     )
     app.scitt_service.initialize_service()
     print(f"Service parameters: {app.service_parameters_path}")
@@ -127,12 +137,20 @@ def cli(fn):
         default=None,
     )
     parser.add_argument("--middleware-config-path", type=Path, default=None)
+    parser.add_argument(
+        "--federation",
+        type=lambda value: list(entrypoint_style_load(value))[0],
+        default=None,
+    )
+    parser.add_argument("--federation-config-path", type=Path, default=None)
 
     def cmd(args):
         app = create_flask_app(
             {
                 "middleware": args.middleware,
                 "middleware_config_path": args.middleware_config_path,
+                "federation": args.federation,
+                "federation_config_path": args.federation_config_path,
                 "tree_alg": args.tree_alg,
                 "workspace": args.workspace,
                 "error_rate": args.error_rate,

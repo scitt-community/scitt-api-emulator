@@ -14,6 +14,8 @@ import pycose.headers
 
 from scitt_emulator.create_statement import CWTClaims
 from scitt_emulator.verify_statement import verify_statement
+from scitt_emulator.federation import SCITTFederation
+
 
 # temporary receipt header labels, see draft-birkholz-scitt-receipts
 COSE_Headers_Service_Id = "service_id"
@@ -43,10 +45,14 @@ class PolicyResultDecodeError(Exception):
 
 class SCITTServiceEmulator(ABC):
     def __init__(
-        self, service_parameters_path: Path, storage_path: Optional[Path] = None
+        self,
+        service_parameters_path: Path,
+        storage_path: Optional[Path] = None,
+        federation: Optional[SCITTFederation] = None,
     ):
         self.storage_path = storage_path
         self.service_parameters_path = service_parameters_path
+        self.federation = federation
 
         if storage_path is not None:
             self.operations_path = storage_path / "operations"
@@ -121,7 +127,7 @@ class SCITTServiceEmulator(ABC):
 
         entry_id = str(last_entry_id + 1)
 
-        self._create_receipt(claim, entry_id)
+        receipt = self._create_receipt(claim, entry_id)
 
         last_entry_path.write_text(entry_id)
 
@@ -131,6 +137,10 @@ class SCITTServiceEmulator(ABC):
         print(f"A COSE signed Claim was written to:  {claim_path}")
     
         entry = {"entryId": entry_id}
+
+        if self.federation:
+            self.federation.created_entry(entry_id, receipt)
+
         return entry
     
     def _create_operation(self, claim: bytes):
@@ -272,6 +282,7 @@ class SCITTServiceEmulator(ABC):
         with open(receipt_path, "wb") as f:
             f.write(receipt)
         print(f"Receipt written to {receipt_path}")
+        return receipt
 
     def get_receipt(self, entry_id: str):
         receipt_path = self.storage_path / f"{entry_id}.receipt.cbor"
