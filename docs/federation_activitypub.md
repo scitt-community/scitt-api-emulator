@@ -2,13 +2,49 @@
 
 - Federation of SCITT events enables near real-time communication between supply
   chains.
-    - Acceptance of claims to SCITT where payload data contains VEX, VSA, SBOM,
-      S2C2F alignment attestations, etc. has the side effect of enabling a
-      consistent pattern for notification of new vulnerability (OpenSSF Stream
-      8) and other Software Supply Chain Security data.
+    - Acceptance of claims to SCITT where payload data contains VEX, CSAF, VSA,
+      SBOM, VDR, VRF, S2C2F alignment attestations, etc. has the side effect of
+      enabling a consistent pattern for notification of new vulnerability
+      and other Software Supply Chain Security data.
 - References
-  - [7.](https://www.ietf.org/archive/id/draft-ietf-scitt-architecture-02.html#name-federation)
+  - [SCITT Architecture: 7. Federation](https://www.ietf.org/archive/id/draft-ietf-scitt-architecture-02.html#name-federation)
   - https://www.w3.org/TR/activitypub/
+  - [OpenSSF Stream 8](https://8112310.fs1.hubspotusercontent-na1.net/hubfs/8112310/OpenSSF/OSS%20Mobilization%20Plan.pdf):
+    Coordinate Industry-Wide Data Sharing to Improve the Research That Helps
+    Determine the Most Critical OSS Components
+
+```mermaid
+flowchart TD
+    subgraph alice
+      subgraph aliceSCITT[SCITT]
+        alice_submit_claim[Submit Claim]
+        alice_receipt_created[Receipt Created]
+
+        alice_submit_claim --> alice_receipt_created
+      end
+      subgraph aliceActivityPubActor[ActivityPub Actor]
+        alice_inbox[Inbox]
+      end
+
+      alice_inbox --> alice_submit_claim
+    end
+    subgraph bob
+      subgraph bobSCITT[SCITT]
+        bob_submit_claim[Submit Claim]
+        bob_receipt_created[Receipt Created]
+
+        bob_submit_claim --> bob_receipt_created
+      end
+      subgraph bobActivityPubActor[ActivityPub Actor]
+        bob_inbox[Inbox]
+      end
+
+      bob_inbox --> bob_submit_claim
+    end
+
+    alice_receipt_created --> bob_inbox
+    bob_receipt_created --> alice_inbox
+```
 
 ## Dependencies
 
@@ -51,6 +87,7 @@ By the end of this tutorial you will have four terminals open.
 - One for submitting claims to Bob and Alice's SCITT instances and querying
   their ActivityPub Actors.
 
+
 ### Bring up the ActivityPub Server
 
 First we install our dependencies
@@ -91,13 +128,15 @@ BovineHerd(app)
 We'll run on port 5000 to avoid collisions with common default port choices.
 Keep this running for the rest of the tutorial.
 
-> TODO Integrate Quart app launch into `SCITTFederationActivityPubBovine`
+> **TODO** Integrate Quart app launch into `SCITTFederationActivityPubBovine`
 > initialization.
 
 ```console
 $ hypercorn app:app -b 0.0.0.0:5000
 [2023-10-16 02:44:48 -0700] [36467] [INFO] Running on http://0.0.0.0:5000 (CTRL + C to quit)
 ```
+
+> Cleanup: `rm -f *sqlite* federation_*/config.toml`
 
 ### Bring up Bob's SCITT Instance
 
@@ -107,9 +146,15 @@ Populate Bob's federation config
 
 ```json
 {
-    "domain": "http://localhost:5000",
-    "handle_name": "bob",
-    "workspace": "federation_bob"
+  "domain": "http://localhost:5000",
+  "handle_name": "bob",
+  "workspace": "~/Documents/fediverse/scitt_federation_bob",
+  "following": {
+    "alice": {
+      "actor_id": "acct:alice@localhost:5000",
+      "domain": "http://localhost:5000"
+    }
+  }
 }
 ```
 
@@ -118,10 +163,18 @@ Start the server
 ```console
 $ rm -rf workspace_bob/
 $ mkdir -p workspace_bob/storage/operations
-$ scitt-emulator server --workspace workspace_bob/ --tree-alg CCF --port 6000 \
+$ BOVINE_DB_URL="sqlite://${PWD}/bovine.sqlite3" scitt-emulator server \
+    --workspace workspace_bob/ --tree-alg CCF --port 6000 \
     --federation scitt_emulator.federation_activitypub_bovine:SCITTFederationActivityPubBovine \
     --federation-config-path federation_bob/config.json
 ```
+
+> **TODO** Figure out why the server was restarting constantly if in
+> scitt-api-emulator directory (sqlite3?).
+>
+> ```console
+> $ rm -f ~/Documents/fediverse/scitt_federation_bob/config.toml && BOVINE_DB_URL="sqlite://${HOME}/Documents/fediverse/bovine/hacking/bovine.sqlite3" scitt-emulator server --workspace workspace_bob/ --tree-alg CCF --port 6000     --federation scitt_emulator.federation_activitypub_bovine:SCITTFederationActivityPubBovine     --federation-config-path ~/Documents/fediverse/scitt_federation_bob/config.json 
+> ```
 
 Create claim from allowed issuer (`.org`) and from non-allowed (`.com`).
 
@@ -146,9 +199,15 @@ Populate Alice's federation config
 
 ```json
 {
-    "domain": "http://localhost:5000",
-    "handle_name": "alice",
-    "workspace": "federation_alice"
+  "domain": "http://localhost:5000",
+  "handle_name": "alice",
+  "workspace": "~/Documents/fediverse/scitt_federation_alice",
+  "following": {
+    "bob": {
+      "actor_id": "acct:bob@localhost:5000",
+      "domain": "http://localhost:5000"
+    }
+  }
 }
 ```
 
@@ -157,7 +216,8 @@ Start the server
 ```console
 $ rm -rf workspace_alice/
 $ mkdir -p workspace_alice/storage/operations
-$ scitt-emulator server --workspace workspace_alice/ --tree-alg CCF --port 7000 \
+$ BOVINE_DB_URL="sqlite://${PWD}/bovine.sqlite3" scitt-emulator server \
+    --workspace workspace_alice/ --tree-alg CCF --port 7000 \
     --federation scitt_emulator.federation_activitypub_bovine:SCITTFederationActivityPubBovine \
     --federation-config-path federation_alice/config.json
 ```

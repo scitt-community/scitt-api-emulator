@@ -49,16 +49,17 @@ def create_flask_app(config):
 
     federation = None
     if app.config.get("federation", None):
-        federation = app.config["federation"](
+        app.federation = app.config["federation"](
             config_path=app.config.get("federation_config_path", None),
             storage_path=storage_path,
             service_parameters_path=app.service_parameters_path
         )
+        app.federation.initialize_service()
 
     app.scitt_service = clazz(
         storage_path=storage_path,
         service_parameters_path=app.service_parameters_path,
-        federation=federation,
+        federation=app.federation,
     )
     app.scitt_service.initialize_service()
     print(f"Service parameters: {app.service_parameters_path}")
