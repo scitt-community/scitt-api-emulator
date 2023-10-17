@@ -112,7 +112,7 @@ $ python -m venv .venv && \
 
 We create a basic ActivityPub server.
 
-**app.py**
+**~/Documents/fediverse/bovine_herd_server/app.py**
 
 ```python
 from quart import Quart
@@ -132,7 +132,7 @@ Keep this running for the rest of the tutorial.
 > initialization.
 
 ```console
-$ hypercorn app:app -b 0.0.0.0:5000
+$ rm -rf *sqlite* && BUTCHER_ALLOW_HTTP=1 hypercorn app:app -b 0.0.0.0:5000
 [2023-10-16 02:44:48 -0700] [36467] [INFO] Running on http://0.0.0.0:5000 (CTRL + C to quit)
 ```
 
@@ -142,7 +142,7 @@ $ hypercorn app:app -b 0.0.0.0:5000
 
 Populate Bob's federation config
 
-**federation_bob/config.json**
+**~/Documents/fediverse/scitt_federation_bob/config.json**
 
 ```json
 {
@@ -163,10 +163,10 @@ Start the server
 ```console
 $ rm -rf workspace_bob/
 $ mkdir -p workspace_bob/storage/operations
-$ BOVINE_DB_URL="sqlite://${PWD}/bovine.sqlite3" scitt-emulator server \
+$ BOVINE_DB_URL="sqlite://${HOME}/Documents/fediverse/bovine_herd_server/bovine.sqlite3" scitt-emulator server \
     --workspace workspace_bob/ --tree-alg CCF --port 6000 \
     --federation scitt_emulator.federation_activitypub_bovine:SCITTFederationActivityPubBovine \
-    --federation-config-path federation_bob/config.json
+    --federation-config-path ${HOME}/Documents/fediverse/scitt_federation_bob/config.json
 ```
 
 > **TODO** Figure out why the server was restarting constantly if in
@@ -195,7 +195,7 @@ Receipt written to claim.receipt.cbor
 
 Populate Alice's federation config
 
-**federation_alice/config.json**
+**~/Documents/fediverse/scitt_federation_alice/config.json**
 
 ```json
 {
@@ -216,10 +216,10 @@ Start the server
 ```console
 $ rm -rf workspace_alice/
 $ mkdir -p workspace_alice/storage/operations
-$ BOVINE_DB_URL="sqlite://${PWD}/bovine.sqlite3" scitt-emulator server \
+$ BOVINE_DB_URL="sqlite://${HOME}/Documents/fediverse/bovine_herd_server/bovine.sqlite3" scitt-emulator server \
     --workspace workspace_alice/ --tree-alg CCF --port 7000 \
     --federation scitt_emulator.federation_activitypub_bovine:SCITTFederationActivityPubBovine \
-    --federation-config-path federation_alice/config.json
+    --federation-config-path ${HOME}/Documents/fediverse/scitt_federation_alice/config.json
 ```
 
 Create claim from allowed issuer (`.org`) and from non-allowed (`.com`).

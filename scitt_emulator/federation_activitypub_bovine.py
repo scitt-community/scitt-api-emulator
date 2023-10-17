@@ -243,24 +243,29 @@ class WebFingerLookupNotFoundError(Exception):
     pass
 
 
-async def init_follow(client, actor_id: str, domain: str = None):
+async def _init_follow(client, actor_id: str, domain: str = None, retry: int = 5):
     url, _ = await lookup_uri_with_webfinger(client.session, actor_id, domain=domain)
     if not url:
         raise WebFingerLookupNotFoundError(f"actor_id: {actor_id}, domain: {domain}")
     remote_data = await client.get(url)
     remote_inbox = remote_data["inbox"]
-    activity = (
-        client.activity_factory.follow(
-            {
-                "id": actor_id,
-            },
-        )
-        .as_public()
-        .build()
-    )
-    logger.info("POSTing Follow to %s inbox %s: %r", actor_id, remote_inbox, activity)
+    activity = client.activity_factory.follow(
+        {
+            "id": actor_id,
+        },
+    ).build()
+    logger.info("Sending follow to %s: %r", actor_id, activity)
     # await client.post(remote_inbox, follow)
     await client.send_to_outbox(activity)
+
+
+async def init_follow(client, retry: int = 5, **kwargs):
+    for i in range(0, retry):
+        try:
+            return await _init_follow(client, retry=retry, **kwargs)
+        except WebFingerLookupNotFoundError as error:
+            logger.error(repr(error))
+            await asyncio.sleep(2**i)
 
 
 async def federate_created_entries(
