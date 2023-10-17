@@ -225,7 +225,9 @@ async def handle(
             case HandlerEvent.CLOSED:
                 return
             case HandlerEvent.DATA:
-                pprint.pprint(data)
+                logger.info(
+                    "Got new data in ActivityPub inbox: %s", pprint.pformat(data)
+                )
                 if data.get("type") != "Create":
                     return
 
@@ -244,18 +246,17 @@ class WebFingerLookupNotFoundError(Exception):
 
 
 async def _init_follow(client, actor_id: str, domain: str = None, retry: int = 5):
-    url, _ = await lookup_uri_with_webfinger(client.session, actor_id, domain=domain)
+    url, _ = await lookup_uri_with_webfinger(
+        client.session, f"acct:{actor_id}", domain=domain
+    )
     if not url:
         raise WebFingerLookupNotFoundError(f"actor_id: {actor_id}, domain: {domain}")
     remote_data = await client.get(url)
     remote_inbox = remote_data["inbox"]
     activity = client.activity_factory.follow(
-        {
-            "id": actor_id,
-        },
+        url,
     ).build()
     logger.info("Sending follow to %s: %r", actor_id, activity)
-    # await client.post(remote_inbox, follow)
     await client.send_to_outbox(activity)
 
 
