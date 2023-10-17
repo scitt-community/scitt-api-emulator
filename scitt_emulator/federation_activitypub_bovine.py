@@ -247,28 +247,20 @@ async def init_follow(client, actor_id: str, domain: str = None):
     url, _ = await lookup_uri_with_webfinger(client.session, actor_id, domain=domain)
     if not url:
         raise WebFingerLookupNotFoundError(f"actor_id: {actor_id}, domain: {domain}")
-    actor_data = await client.get(url)
-    print(actor_data)
-    return
-    actor = bovine.BovineActor(
-        actor_id=follow.id,
-        public_key_url=f"{follow.domain}#main-key",
-    )
-    print(actor)
-
-    return
-    remote_inbox = (await client.get(remote))["inbox"]
-    print(remote_inbox)
-    return
-    activity = client.activity_factory.create(
-        client.object_factory.follow(
-            dataclasses.asdict(follow),
+    remote_data = await client.get(url)
+    remote_inbox = remote_data["inbox"]
+    activity = (
+        client.activity_factory.follow(
+            {
+                "id": actor_id,
+            },
         )
         .as_public()
         .build()
-    ).build()
-    logger.info("Following... %r", activity)
-    await client.post(remote_inbox, follow)
+    )
+    logger.info("POSTing Follow to %s inbox %s: %r", actor_id, remote_inbox, activity)
+    # await client.post(remote_inbox, follow)
+    await client.send_to_outbox(activity)
 
 
 async def federate_created_entries(
