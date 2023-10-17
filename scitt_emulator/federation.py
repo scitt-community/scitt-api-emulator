@@ -19,5 +19,12 @@ class SCITTFederation(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def created_entry(self, entry_id: str, receipt: bytes):
+    def created_entry(
+        self,
+        treeAlgorithm: str,
+        entry_id: str,
+        receipt: bytes,
+        claim: bytes,
+        public_service_parameters: bytes,
+    ):
         raise NotImplementedError

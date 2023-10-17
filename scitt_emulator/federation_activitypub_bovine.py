@@ -7,6 +7,7 @@ import inspect
 import logging
 import asyncio
 import pathlib
+import tempfile
 import traceback
 import contextlib
 import subprocess
@@ -24,6 +25,7 @@ from bovine.clients import lookup_uri_with_webfinger
 from mechanical_bull.handlers import HandlerEvent, HandlerAPIVersion
 
 from scitt_emulator.federation import SCITTFederation
+from scitt_emulator.tree_algs import TREE_ALGS
 
 logger = logging.getLogger(__name__)
 
@@ -182,10 +184,28 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
         )
         atexit.register(self.mechanical_bull_proc.terminate)
 
-    def created_entry(self, entry_id: str, receipt: bytes):
+    def created_entry(
+        self,
+        treeAlgorithm: str,
+        entry_id: str,
+        receipt: bytes,
+        claim: bytes,
+        public_service_parameters: bytes,
+    ):
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.connect(str(self.federate_created_entries_socket_path.resolve()))
-            client.send(receipt)
+            client.send(
+                json.dumps(
+                    {
+                        "treeAlgorithm": treeAlgorithm,
+                        "service_parameters": base64.b64encode(
+                            public_service_parameters
+                        ).decode(),
+                        "receipt": base64.b64encode(receipt).decode(),
+                        "claim": base64.b64encode(claim).decode(),
+                    }
+                ).encode()
+            )
             client.close()
 
 
@@ -237,10 +257,34 @@ async def handle(
 
                 # Send federated claim / receipt to SCITT
                 content = obj.get("content")
+                if not isinstance(content, dict):
+                    return
+                logger.info("Federation received new receipt: %r", content)
 
                 # TODO Entry ID?
-                receipt = base64.b64decode(content.encode())
-                logger.info("Federation received new receipt: %r", receipt)
+                treeAlgorithm = content["treeAlgorithm"]
+                claim = base64.b64decode(content["claim"].encode())
+                receipt = base64.b64decode(content["receipt"].encode())
+                service_parameters = base64.b64decode(
+                    content["service_parameters"].encode()
+                )
+
+                with tempfile.TemporaryDirectory() as tempdir:
+                    receipt_path = Path(tempdir, "receipt")
+                    receipt_path.write_bytes(receipt)
+                    cose_path = Path(tempdir, "claim")
+                    cose_path.write_bytes(claim)
+                    service_parameters_path = Path(tempdir, "service_parameters")
+                    service_parameters_path.write_bytes(service_parameters)
+                    print(service_parameters)
+
+                    clazz = TREE_ALGS[treeAlgorithm]
+                    service = clazz(service_parameters_path=service_parameters_path)
+                    service.verify_receipt(cose_path, receipt_path)
+
+                    logger.info("Receipt verified")
+
+                    # TODO Submit to own SCITT
     except Exception as ex:
         logger.error(ex)
         logger.exception(ex)
@@ -282,11 +326,12 @@ async def federate_created_entries(
     async def federate_created_entry(reader, writer):
         try:
             logger.info("federate_created_entry() Reading... %r", reader)
-            receipt = await reader.read()
-            logger.info("federate_created_entry() Read: %r", receipt)
+            content_bytes = await reader.read()
+            content = json.loads(content_bytes.decode())
+            logger.info("federate_created_entry() Read: %r", content)
             note = (
                 client.object_factory.note(
-                    content=base64.b64encode(receipt).decode(),
+                    content=content,
                 )
                 .as_public()
                 .build()

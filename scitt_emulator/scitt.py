@@ -117,6 +117,10 @@ class SCITTServiceEmulator(ABC):
         else:
             return self._create_entry(claim)
 
+    def public_service_parameters(self) -> bytes:
+        # TODO Only export public portion of cert
+        return json.dumps(self.service_parameters).encode()
+
     def _create_entry(self, claim: bytes) -> dict:
         last_entry_path = self.storage_path / "last_entry_id.txt"
         if last_entry_path.exists():
@@ -139,7 +143,13 @@ class SCITTServiceEmulator(ABC):
         entry = {"entryId": entry_id}
 
         if self.federation:
-            self.federation.created_entry(entry_id, receipt)
+            self.federation.created_entry(
+                self.tree_alg,
+                entry_id,
+                receipt,
+                claim,
+                self.public_service_parameters(),
+            )
 
         return entry
     

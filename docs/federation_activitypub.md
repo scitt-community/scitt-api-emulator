@@ -151,7 +151,7 @@ Populate Bob's federation config
   "workspace": "~/Documents/fediverse/scitt_federation_bob",
   "following": {
     "alice": {
-      "actor_id": "acct:alice@localhost:5000",
+      "actor_id": "alice@localhost:5000",
       "domain": "http://localhost:5000"
     }
   }
@@ -204,7 +204,7 @@ Populate Alice's federation config
   "workspace": "~/Documents/fediverse/scitt_federation_alice",
   "following": {
     "bob": {
-      "actor_id": "acct:bob@localhost:5000",
+      "actor_id": "bob@localhost:5000",
       "domain": "http://localhost:5000"
     }
   }
