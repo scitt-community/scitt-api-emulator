@@ -231,10 +231,16 @@ async def handle(
                 if data.get("type") != "Create":
                     return
 
-                # TODO Send federated claim / receipt to SCITT
                 obj = data.get("object")
                 if not isinstance(obj, dict):
                     return
+
+                # Send federated claim / receipt to SCITT
+                content = obj.get("content")
+
+                # TODO Entry ID?
+                receipt = base64.b64decode(content.encode())
+                logger.info("Federation received new receipt: %r", receipt)
     except Exception as ex:
         logger.error(ex)
         logger.exception(ex)
