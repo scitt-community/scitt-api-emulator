@@ -7,6 +7,7 @@ from pathlib import Path
 import time
 import json
 import uuid
+import hashlib
 
 import cbor2
 from pycose.messages import Sign1Message
@@ -26,6 +27,8 @@ COSE_Headers_Issued_At = "issued_at"
 MOST_PERMISSIVE_INSERT_POLICY = "*"
 DEFAULT_INSERT_POLICY = MOST_PERMISSIVE_INSERT_POLICY
 
+# hash algorithm used to content address claims to entryIDs
+DEFAULT_ENTRY_ID_HASH_ALGORITHM = "sha384"
 
 class ClaimInvalidError(Exception):
     pass
@@ -108,6 +111,12 @@ class SCITTServiceEmulator(ABC):
     def submit_claim(self, claim: bytes, long_running=True) -> dict:
         insert_policy = self.service_parameters.get("insertPolicy", DEFAULT_INSERT_POLICY)
 
+        try:
+            entry_id = self.get_entry_id(claim)
+            return self.get_entry(entry_id)
+        except EntryNotFoundError:
+            pass
+
         if long_running:
             return self._create_operation(claim)
         elif insert_policy != MOST_PERMISSIVE_INSERT_POLICY:
@@ -121,19 +130,20 @@ class SCITTServiceEmulator(ABC):
         # TODO Only export public portion of cert
         return json.dumps(self.service_parameters).encode()
 
-    def _create_entry(self, claim: bytes) -> dict:
-        last_entry_path = self.storage_path / "last_entry_id.txt"
-        if last_entry_path.exists():
-            with open(last_entry_path, "r") as f:
-                last_entry_id = int(f.read())
-        else:
-            last_entry_id = 0
+    def get_entry_id(self, claim: bytes) -> str:
+        entry_id_hash_alg = self.service_parameters.get(
+            "entryIdHashAlgorith",
+            DEFAULT_ENTRY_ID_HASH_ALGORITHM,
+        )
+        entry_id_hash = hashlib.new(entry_id_hash_alg)
+        entry_id_hash.update(claim)
+        entry_id = f"{entry_id_hash_alg}:{entry_id_hash.hexdigest()}"
+        return entry_id
 
-        entry_id = str(last_entry_id + 1)
+    def _create_entry(self, claim: bytes) -> dict:
+        entry_id = self.get_entry_id(claim)
 
         receipt = self._create_receipt(claim, entry_id)
-
-        last_entry_path.write_text(entry_id)
 
         claim_path = self.storage_path / f"{entry_id}.cose"
         claim_path.write_bytes(claim)
