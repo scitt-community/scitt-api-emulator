@@ -87,6 +87,12 @@ By the end of this tutorial you will have four terminals open.
 - One for submitting claims to Bob and Alice's SCITT instances and querying
   their ActivityPub Actors.
 
+### S2C2F Notes
+
+- ING-4: Mirror a copy of all OSS source code to an internal location
+  - One might also want to mirror trust attestations, integrity data, etc. to
+    ensure availability. Federation could assist with keeping mirrors as up to
+    date as possible.
 
 ### Bring up the ActivityPub Server
 
