@@ -34,7 +34,7 @@ import pprint
 
 @dataclasses.dataclass
 class Follow:
-    id: str
+    actor_id: str
     domain: str = None
 
 

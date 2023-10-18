@@ -9,7 +9,7 @@
 - References
   - [SCITT Architecture: 7. Federation](https://www.ietf.org/archive/id/draft-ietf-scitt-architecture-02.html#name-federation)
   - https://www.w3.org/TR/activitypub/
-  - [OpenSSF Stream 8](https://8112310.fs1.hubspotusercontent-na1.net/hubfs/8112310/OpenSSF/OSS%20Mobilization%20Plan.pdf):
+  - [OpenSSF Stream 8](https://openssf.org/oss-security-mobilization-plan/):
     Coordinate Industry-Wide Data Sharing to Improve the Research That Helps
     Determine the Most Critical OSS Components
 
