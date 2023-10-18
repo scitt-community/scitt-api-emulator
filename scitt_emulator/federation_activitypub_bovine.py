@@ -276,7 +276,6 @@ async def handle(
                     cose_path.write_bytes(claim)
                     service_parameters_path = Path(tempdir, "service_parameters")
                     service_parameters_path.write_bytes(service_parameters)
-                    print(service_parameters)
 
                     clazz = TREE_ALGS[treeAlgorithm]
                     service = clazz(service_parameters_path=service_parameters_path)
@@ -284,7 +283,19 @@ async def handle(
 
                     logger.info("Receipt verified")
 
-                    # TODO Submit to own SCITT
+                    return
+                    # TODO Announce that this entry ID was created via
+                    # federation to avoid an infinate loop
+                    scitt_emulator.client.submit_claim(
+                        home_scitt_url,
+                        claim,
+                        str(Path(tempdir, "home_receipt").resolve()),
+                        str(Path(tempdir, "home_entry_id").resolve()),
+                        scitt_emulator.client.HttpClient(
+                            home_scitt_token,
+                            home_scitt_cacert,
+                        ),
+                    )
     except Exception as ex:
         logger.error(ex)
         logger.exception(ex)
