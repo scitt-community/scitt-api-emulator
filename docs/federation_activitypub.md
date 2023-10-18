@@ -175,28 +175,6 @@ $ BOVINE_DB_URL="sqlite://${HOME}/Documents/fediverse/bovine_herd_server/bovine.
     --federation-config-path ${HOME}/Documents/fediverse/scitt_federation_bob/config.json
 ```
 
-> **TODO** Figure out why the server was restarting constantly if in
-> scitt-api-emulator directory (sqlite3?).
->
-> ```console
-> $ rm -f ~/Documents/fediverse/scitt_federation_bob/config.toml && BOVINE_DB_URL="sqlite://${HOME}/Documents/fediverse/bovine/hacking/bovine.sqlite3" scitt-emulator server --workspace workspace_bob/ --tree-alg CCF --port 6000     --federation scitt_emulator.federation_activitypub_bovine:SCITTFederationActivityPubBovine     --federation-config-path ~/Documents/fediverse/scitt_federation_bob/config.json 
-> ```
-
-Create claim from allowed issuer (`.org`) and from non-allowed (`.com`).
-
-```console
-$ scitt-emulator client create-claim --issuer did:web:example.com --content-type application/json --payload '{"sun": "yellow"}' --out claim.cose
-Claim written to claim.cose
-$ scitt-emulator client submit-claim --url http://localhost:6000 --claim claim.cose --out claim.receipt.cbor
-Claim registered with entry ID 1
-Receipt written to claim.receipt.cbor
-$ scitt-emulator client create-claim --issuer did:web:example.org --content-type application/json --payload '{"sun": "yellow"}' --out claim.cose
-Claim written to claim.cose
-$ scitt-emulator client submit-claim --url http://localhost:6000 --claim claim.cose --out claim.receipt.cbor
-Claim registered with entry ID 2
-Receipt written to claim.receipt.cbor
-```
-
 ### Bring up Alice's SCITT Instance
 
 Populate Alice's federation config
@@ -228,34 +206,25 @@ $ BOVINE_DB_URL="sqlite://${HOME}/Documents/fediverse/bovine_herd_server/bovine.
     --federation-config-path ${HOME}/Documents/fediverse/scitt_federation_alice/config.json
 ```
 
-Create claim from allowed issuer (`.org`) and from non-allowed (`.com`).
+### Create and Submit Claim to Bob's Instance
 
 ```console
-$ scitt-emulator client create-claim --issuer did:web:example.com --content-type application/json --payload '{"sun": "yellow"}' --out claim.cose
-Claim written to claim.cose
-$ scitt-emulator client submit-claim --url http://localhost:7000 --claim claim.cose --out claim.receipt.cbor
-Traceback (most recent call last):
-  File "/home/alice/.local/bin/scitt-emulator", line 33, in <module>
-    sys.exit(load_entry_point('scitt-emulator', 'console_scripts', 'scitt-emulator')())
-  File "/home/alice/Documents/python/scitt-api-emulator/scitt_emulator/cli.py", line 22, in main
-    args.func(args)
-  File "/home/alice/Documents/python/scitt-api-emulator/scitt_emulator/client.py", line 196, in <lambda>
-    func=lambda args: submit_claim(
-  File "/home/alice/Documents/python/scitt-api-emulator/scitt_emulator/client.py", line 107, in submit_claim
-    raise_for_operation_status(operation)
-  File "/home/alice/Documents/python/scitt-api-emulator/scitt_emulator/client.py", line 43, in raise_for_operation_status
-    raise ClaimOperationError(operation)
-scitt_emulator.client.ClaimOperationError: Operation error denied: 'did:web:example.com' is not one of ['did:web:example.org']
-
-Failed validating 'enum' in schema['properties']['issuer']:
-    {'enum': ['did:web:example.org'], 'type': 'string'}
-
-On instance['issuer']:
-    'did:web:example.com'
-
 $ scitt-emulator client create-claim --issuer did:web:example.org --content-type application/json --payload '{"sun": "yellow"}' --out claim.cose
 Claim written to claim.cose
-$ scitt-emulator client submit-claim --url http://localhost:7000 --claim claim.cose --out claim.receipt.cbor
-Claim registered with entry ID 1
+$ scitt-emulator client submit-claim --url http://localhost:6000 --claim claim.cose --out claim.receipt.cbor
+Claim registered with entry ID sha384:76303a87c3ff728578d1e941ec4422193367e31fd37ab178257536cba79724d6411c457cd3c47654975dc924ff023123
 Receipt written to claim.receipt.cbor
+```
+
+### Download Receipt from Alice's Instance
+
+```console
+$ scitt-emulator client retrieve-claim --url http://localhost:7000 --out federated.claim.cose --entry-id sha384:76303a87c3ff728578d1e941ec4422193367e31fd37ab178257536cba79724d6411c457cd3c47654975dc924ff023123
+Claim written to federated.claim.cose
+$ scitt-emulator client retrieve-receipt --url http://localhost:7000 --out federated.claim.receipt.cbor --entry-id sha384:76303a87c3ff728578d1e941ec4422193367e31fd37ab178257536cba79724d6411c457cd3c47654975dc924ff023123
+Receipt written to federated.claim.receipt.cbor
+$ scitt-emulator client verify-receipt --claim federated.claim.cose --receipt federated.claim.receipt.cbor --service-parameters workspace_alice/service_parameters.json
+Leaf hash: 7d8501f1aea9b095b9730dab05f8866c0c9d0e33e6f3f2c7131ff4a3ca1ddf61
+Root: fceb0aa5ac260542753b5086d512fe3bb074ef39ac3becc5d9ce857b020b85fb
+Receipt verified
 ```
