@@ -201,6 +201,7 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
                         "service_parameters": base64.b64encode(
                             public_service_parameters
                         ).decode(),
+                        "entry_id": entry_id,
                         "receipt": base64.b64encode(receipt).decode(),
                         "claim": base64.b64encode(claim).decode(),
                     }
@@ -261,8 +262,8 @@ async def handle(
                     return
                 logger.info("Federation received new receipt: %r", content)
 
-                # TODO Entry ID?
                 treeAlgorithm = content["treeAlgorithm"]
+                _entry_id = content["entry_id"]
                 claim = base64.b64decode(content["claim"].encode())
                 receipt = base64.b64decode(content["receipt"].encode())
                 service_parameters = base64.b64decode(
