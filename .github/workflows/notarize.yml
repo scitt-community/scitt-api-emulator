@@ -1,0 +1,128 @@
+name: "SCITT Notary"
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch:
+    inputs:
+      scitt-url:
+        description: 'URL of SCITT instance'
+        type: string
+      payload:
+        description: 'Payload for claim'
+        default: ''
+        type: string
+  workflow_call:
+    inputs:
+      scitt-url:
+        description: 'URL of SCITT instance'
+        type: string
+      payload:
+        description: 'Payload for claim'
+        type: string
+
+jobs:
+  notarize:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    env:
+      SCITT_URL: '${{ inputs.scitt-url || github.event.inputs.scitt-url }}'
+      PAYLOAD: '${{ inputs.payload || github.event.inputs.payload }}'
+    steps:
+      - name: Set defaults if env vars not set (as happens with on.push trigger)
+        run: |
+          if [[ "x${SCITT_URL}" = "x" ]]; then
+            echo "SCITT_URL=http://localhost:8080" >> "${GITHUB_ENV}"
+          fi
+          if [[ "x${PAYLOAD}" = "x" ]]; then
+            echo 'PAYLOAD={"key": "value"}' >> "${GITHUB_ENV}"
+          fi
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.8
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.8
+      - name: Install SCITT API Emulator
+        run: |
+          pip install -U pip setuptools wheel
+          pip install .[oidc]
+      - name: Install github-script dependencies
+        run: |
+          npm install @actions/core
+      - name: Get OIDC token to use as bearer token for auth to SCITT
+        uses: actions/github-script@v6
+        id: github-oidc
+        with:
+          script: |
+            const {SCITT_URL} = process.env;
+            core.setOutput('token', await core.getIDToken(SCITT_URL));
+      - name: Create claim
+        run: |
+          scitt-emulator client create-claim --issuer did:web:example.org --content-type application/json --payload "${PAYLOAD}" --out claim.cose
+      - name: Submit claim
+        env:
+          OIDC_TOKEN: '${{ steps.github-oidc.outputs.token }}'
+          WORKFLOW_REF: '${{ github.workflow_ref }}'
+          # Use of job_workflow_sha blocked by
+          # https://github.com/actions/runner/issues/2417#issuecomment-1718369460
+          JOB_WORKFLOW_SHA: '${{ github.sha }}'
+          REPOSITORY_OWNER_ID: '${{ github.repository_owner_id }}'
+          REPOSITORY_ID: '${{ github.repository_id }}'
+        run: |
+          # Create the middleware config file
+          tee oidc-middleware-config.json <<EOF
+          {
+              "issuers": ["https://token.actions.githubusercontent.com"],
+              "claim_schema": {
+                  "https://token.actions.githubusercontent.com": {
+                        "\$schema": "https://json-schema.org/draft/2020-12/schema",
+                        "required": [
+                            "job_workflow_ref",
+                            "job_workflow_sha",
+                            "repository_owner_id",
+                            "repository_id"
+                        ],
+                        "properties": {
+                            "job_workflow_ref": {
+                                "type": "string",
+                                "enum": [
+                                    "${WORKFLOW_REF}"
+                                ]
+                            },
+                            "job_workflow_sha": {
+                                "type": "string",
+                                "enum": [
+                                    "${JOB_WORKFLOW_SHA}"
+                                ]
+                            },
+                            "repository_owner_id": {
+                                "type": "string",
+                                "enum": [
+                                    "${REPOSITORY_OWNER_ID}"
+                                ]
+                            },
+                            "repository_id": {
+                                "type": "string",
+                                "enum": [
+                                    "${REPOSITORY_ID}"
+                                ]
+                            }
+                        }
+                    }
+              },
+              "audience": "${SCITT_URL}"
+          }
+          EOF
+          # Start SCITT using the `OIDCAuthMiddleware` and associated config.
+          if [[ "x${SCITT_URL}" = "xhttp://localhost:8080" ]]; then
+            scitt-emulator server --port 8080 --workspace workspace/ --tree-alg CCF \
+              --middleware scitt_emulator.oidc:OIDCAuthMiddleware \
+              --middleware-config-path oidc-middleware-config.json &
+            sleep 1s
+          fi
+          # Submit the claim using OIDC token as auth
+          scitt-emulator client submit-claim --token "${OIDC_TOKEN}" --url "${SCITT_URL}" --claim claim.cose --out claim.receipt.cbor

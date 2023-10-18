@@ -9,6 +9,7 @@ import random
 from flask import Flask, request, send_file, make_response
 
 from scitt_emulator.tree_algs import TREE_ALGS
+from scitt_emulator.plugin_helpers import entrypoint_style_load
 from scitt_emulator.scitt import EntryNotFoundError, ClaimInvalidError, OperationNotFoundError
 
 
@@ -32,6 +33,9 @@ def create_flask_app(config):
     # See http://flask.pocoo.org/docs/latest/config/
     app.config.update(dict(DEBUG=True))
     app.config.update(config)
+
+    if app.config.get("middleware", None):
+        app.wsgi_app = app.config["middleware"](app.wsgi_app, app.config.get("middleware_config_path", None))
 
     error_rate = app.config["error_rate"]
     use_lro = app.config["use_lro"]
@@ -117,10 +121,18 @@ def cli(fn):
     parser.add_argument("--use-lro", action="store_true", help="Create operations for submissions")
     parser.add_argument("--tree-alg", required=True, choices=list(TREE_ALGS.keys()))
     parser.add_argument("--workspace", type=Path, default=Path("workspace"))
+    parser.add_argument(
+        "--middleware",
+        type=lambda value: list(entrypoint_style_load(value))[0],
+        default=None,
+    )
+    parser.add_argument("--middleware-config-path", type=Path, default=None)
 
     def cmd(args):
         app = create_flask_app(
             {
+                "middleware": args.middleware,
+                "middleware_config_path": args.middleware_config_path,
                 "tree_alg": args.tree_alg,
                 "workspace": args.workspace,
                 "error_rate": args.error_rate,
