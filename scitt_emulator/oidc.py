@@ -24,12 +24,12 @@ class OIDCAuthMiddleware:
             ).json()
             self.jwks_clients[issuer] = jwt.PyJWKClient(self.oidc_configs[issuer]["jwks_uri"])
 
-    def __call__(self, environ, start_response):
-        request = Request(environ)
-        claims = self.validate_token(request.headers["Authorization"].replace("Bearer ", ""))
+    async def __call__(self, scope, receive, send):
+        headers = scope.get("headers", {})
+        claims = self.validate_token(headers.get("Authorization", "").replace("Bearer ", ""))
         if "claim_schema" in self.config and claims["iss"] in self.config["claim_schema"]:
             jsonschema.validate(claims, schema=self.config["claim_schema"][claims["iss"]])
-        return self.app(environ, start_response)
+        return await self.app(scope, receive, send)
 
     def validate_token(self, token):
         validation_error = Exception(f"Failed to validate against all issuers: {self.jwks_clients.keys()!s}")

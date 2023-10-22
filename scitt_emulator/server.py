@@ -6,7 +6,7 @@ from pathlib import Path
 from io import BytesIO
 import random
 
-from flask import Flask, request, send_file, make_response
+from quart import Quart, request, send_file, make_response
 from blinker import Namespace
 
 from scitt_emulator.tree_algs import TREE_ALGS
@@ -16,8 +16,8 @@ from scitt_emulator.signals import SCITTSignals
 from scitt_emulator.signals import SCITTSignalsFederationCreatedEntry
 
 
-def make_error(code: str, msg: str, status_code: int):
-    return make_response(
+async def make_error(code: str, msg: str, status_code: int):
+    return await make_response(
         {
             "type": f"urn:ietf:params:scitt:error:{code}",
             "detail": msg,
@@ -26,12 +26,12 @@ def make_error(code: str, msg: str, status_code: int):
     )
 
 
-def make_unavailable_error():
-    return make_error("serviceUnavailable", "Service unavailable, try again later", 503)
+async def make_unavailable_error():
+    return await make_error("serviceUnavailable", "Service unavailable, try again later", 503)
 
 
 def create_flask_app(config):
-    app = Flask(__name__)
+    app = Quart(__name__)
 
     # See http://flask.pocoo.org/docs/latest/config/
     app.config.update(dict(DEBUG=True))
@@ -41,7 +41,8 @@ def create_flask_app(config):
     app.signals = SCITTSignals()
 
     for middleware, middleware_config_path in zip(app.config["middleware"], app.config["middleware_config_path"]):
-        app.wsgi_app = middleware(app.wsgi_app, app.signals, middleware_config_path)
+        # app.wsgi_app = middleware(app.wsgi_app, app.signals, middleware_config_path)
+        app.asgi_app = middleware(app.asgi_app, app.signals, middleware_config_path)
 
     error_rate = app.config["error_rate"]
     use_lro = app.config["use_lro"]
@@ -65,59 +66,59 @@ def create_flask_app(config):
         return random.random() <= error_rate
 
     @app.route("/entries/<string:entry_id>/receipt", methods=["GET"])
-    def get_receipt(entry_id: str):
+    async def get_receipt(entry_id: str):
         if is_unavailable():
-            return make_unavailable_error()
+            return await make_unavailable_error()
         try:
             receipt = app.scitt_service.get_receipt(entry_id)
         except EntryNotFoundError as e:
-            return make_error("entryNotFound", str(e), 404)
-        return send_file(BytesIO(receipt), download_name=f"{entry_id}.receipt.cbor")
+            return await make_error("entryNotFound", str(e), 404)
+        return await send_file(BytesIO(receipt), attachment_filename=f"{entry_id}.receipt.cbor")
 
     @app.route("/entries/<string:entry_id>", methods=["GET"])
-    def get_claim(entry_id: str):
+    async def get_claim(entry_id: str):
         if is_unavailable():
-            return make_unavailable_error()
+            return await make_unavailable_error()
         try:
             claim = app.scitt_service.get_claim(entry_id)
         except EntryNotFoundError as e:
-            return make_error("entryNotFound", str(e), 404)
-        return send_file(BytesIO(claim), download_name=f"{entry_id}.cose")
+            return await make_error("entryNotFound", str(e), 404)
+        return await send_file(BytesIO(claim), attachment_filename=f"{entry_id}.cose")
 
     @app.route("/entries", methods=["POST"])
-    def submit_claim():
+    async def submit_claim():
         if is_unavailable():
-            return make_unavailable_error()
+            return await make_unavailable_error()
         try:
             if use_lro:
-                result = app.scitt_service.submit_claim(request.get_data(), long_running=True)
+                result = app.scitt_service.submit_claim(await request.get_data(), long_running=True)
                 headers = {
                     "Location": f"{request.host_url}/operations/{result['operationId']}",
                     "Retry-After": "1"
                 }
                 status_code = 202
             else:
-                result = app.scitt_service.submit_claim(request.get_data(), long_running=False)
+                result = app.scitt_service.submit_claim(await request.get_data(), long_running=False)
                 headers = {
                     "Location": f"{request.host_url}/entries/{result['entryId']}",
                 }
                 status_code = 201
         except ClaimInvalidError as e:
-            return make_error("invalidInput", str(e), 400)
-        return make_response(result, status_code, headers)
+            return await make_error("invalidInput", str(e), 400)
+        return await make_response(result, status_code, headers)
 
     @app.route("/operations/<string:operation_id>", methods=["GET"])
-    def get_operation(operation_id: str):
+    async def get_operation(operation_id: str):
         if is_unavailable():
-            return make_unavailable_error()
+            return await make_unavailable_error()
         try:
             operation = app.scitt_service.get_operation(operation_id)
         except OperationNotFoundError as e:
-            return make_error("operationNotFound", str(e), 404)
+            return await make_error("operationNotFound", str(e), 404)
         headers = {}
         if operation["status"] == "running":
             headers["Retry-After"] = "1"
-        return make_response(operation, 200, headers)
+        return await make_response(operation, 200, headers)
 
     return app
 

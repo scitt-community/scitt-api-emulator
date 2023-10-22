@@ -28,6 +28,7 @@ setup(
         "pycose",
         "httpx",
         "flask",
+        "quart",
         "rkvst-archivist"
     ],
     extras_require={

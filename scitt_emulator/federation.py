@@ -16,8 +16,8 @@ class SCITTFederation(ABC):
         if config_path and config_path.exists():
             self.config = json.loads(config_path.read_text())
 
-    def __call__(self, environ, start_response):
-        return self.app(environ, start_response)
+    async def __call__(self, scope, receive, send):
+        return await self.app(scope, receive, send)
 
     def connect_signals(self):
         self.created_entry = self.signals.federation.created_entry.connect(self.created_entry)
