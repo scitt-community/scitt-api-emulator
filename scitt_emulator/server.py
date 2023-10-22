@@ -7,10 +7,12 @@ from io import BytesIO
 import random
 
 from flask import Flask, request, send_file, make_response
+from blinker import Namespace
 
 from scitt_emulator.tree_algs import TREE_ALGS
 from scitt_emulator.plugin_helpers import entrypoint_style_load
 from scitt_emulator.scitt import EntryNotFoundError, ClaimInvalidError, OperationNotFoundError
+from scitt_emulator.signals import SCITTSignals
 
 
 def make_error(code: str, msg: str, status_code: int):
@@ -34,8 +36,11 @@ def create_flask_app(config):
     app.config.update(dict(DEBUG=True))
     app.config.update(config)
 
-    if app.config.get("middleware", None):
-        app.wsgi_app = app.config["middleware"](app.wsgi_app, app.config.get("middleware_config_path", None))
+    # See https://blinker.readthedocs.io/en/stable/#blinker.base.Signal.send
+    app.signals = SCITTSignals()
+
+    for middleware, middleware_config_path in zip(app.config["middleware"], app.config["middleware_config_path"]):
+        app.wsgi_app = middleware(app.wsgi_app, app.signals, middleware_config_path)
 
     error_rate = app.config["error_rate"]
     use_lro = app.config["use_lro"]
@@ -47,19 +52,10 @@ def create_flask_app(config):
 
     clazz = TREE_ALGS[app.config["tree_alg"]]
 
-    federation = None
-    if app.config.get("federation", None):
-        app.federation = app.config["federation"](
-            config_path=app.config.get("federation_config_path", None),
-            storage_path=storage_path,
-            service_parameters_path=app.service_parameters_path
-        )
-        app.federation.initialize_service()
-
     app.scitt_service = clazz(
+        signals=app.signals,
         storage_path=storage_path,
         service_parameters_path=app.service_parameters_path,
-        federation=app.federation,
     )
     app.scitt_service.initialize_service()
     print(f"Service parameters: {app.service_parameters_path}")
@@ -135,23 +131,16 @@ def cli(fn):
     parser.add_argument(
         "--middleware",
         type=lambda value: list(entrypoint_style_load(value))[0],
-        default=None,
+        nargs="*",
+        default=[],
     )
-    parser.add_argument("--middleware-config-path", type=Path, default=None)
-    parser.add_argument(
-        "--federation",
-        type=lambda value: list(entrypoint_style_load(value))[0],
-        default=None,
-    )
-    parser.add_argument("--federation-config-path", type=Path, default=None)
+    parser.add_argument("--middleware-config-path", type=Path, nargs="*", default=[])
 
     def cmd(args):
         app = create_flask_app(
             {
                 "middleware": args.middleware,
                 "middleware_config_path": args.middleware_config_path,
-                "federation": args.federation,
-                "federation_config_path": args.federation_config_path,
                 "tree_alg": args.tree_alg,
                 "workspace": args.workspace,
                 "error_rate": args.error_rate,

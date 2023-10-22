@@ -16,6 +16,7 @@ import pycose.headers
 from scitt_emulator.create_statement import CWTClaims
 from scitt_emulator.verify_statement import verify_statement
 from scitt_emulator.federation import SCITTFederation
+from scitt_emulator.signals import SCITTSignals
 
 
 # temporary receipt header labels, see draft-birkholz-scitt-receipts
@@ -49,13 +50,12 @@ class PolicyResultDecodeError(Exception):
 class SCITTServiceEmulator(ABC):
     def __init__(
         self,
+        signals: SCITTSignals,
         service_parameters_path: Path,
         storage_path: Optional[Path] = None,
-        federation: Optional[SCITTFederation] = None,
     ):
         self.storage_path = storage_path
         self.service_parameters_path = service_parameters_path
-        self.federation = federation
 
         if storage_path is not None:
             self.operations_path = storage_path / "operations"
@@ -152,14 +152,16 @@ class SCITTServiceEmulator(ABC):
     
         entry = {"entryId": entry_id}
 
-        if self.federation:
-            self.federation.created_entry(
-                self.tree_alg,
-                entry_id,
-                receipt,
-                claim,
-                self.public_service_parameters(),
+        self.signals.federation.created_entry.send(
+            self,
+            event_data=SCITTSignalsFederationCreatedEntry(
+                tree_alg=self.tree_alg,
+                entry_id=entry_id,
+                recipt=receipt,
+                claim=claim,
+                public_service_parameters=self.public_service_parameters(),
             )
+        )
 
         return entry
     

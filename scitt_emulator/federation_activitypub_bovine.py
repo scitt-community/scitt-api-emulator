@@ -26,6 +26,7 @@ from mechanical_bull.handlers import HandlerEvent, HandlerAPIVersion
 
 from scitt_emulator.federation import SCITTFederation
 from scitt_emulator.tree_algs import TREE_ALGS
+from scitt_emulator.signals import SCITTSignals
 
 logger = logging.getLogger(__name__)
 
@@ -66,16 +67,8 @@ async def get_actor_url(
 
 
 class SCITTFederationActivityPubBovine(SCITTFederation):
-    def __init__(
-        self,
-        config_path: Path,
-        service_parameters_path: Path,
-        storage_path: Optional[Path] = None,
-    ):
-        super().__init__(config_path, service_parameters_path, storage_path)
-        self.config = {}
-        if config_path and config_path.exists():
-            self.config = json.loads(config_path.read_text())
+    def __init__(self, app, signals, config_path):
+        super().__init__(app, signals, config_path)
 
         self.start_herd = self.config.get("start_herd", False)
         if self.start_herd:

@@ -1,18 +1,19 @@
+import json
+import dataclasses
 from pathlib import Path
 from abc import ABC, abstractmethod
 from typing import Optional
 
+from scitt_emulator.signals import SCITTSignals
+
 
 class SCITTFederation(ABC):
-    def __init__(
-        self,
-        config_path: Path,
-        service_parameters_path: Path,
-        storage_path: Optional[Path] = None,
-    ):
-        self.config_path = config_path
-        self.service_parameters_path = service_parameters_path
-        self.storage_path = storage_path
+    def __init__(self, app, signals: SCITTSignals, config_path: Path):
+        self.app = app
+        self.signals = signals
+        self.config = {}
+        if config_path and config_path.exists():
+            self.config = json.loads(config_path.read_text())
 
     @abstractmethod
     def initialize_service(self):
