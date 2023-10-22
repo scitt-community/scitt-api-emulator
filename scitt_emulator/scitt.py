@@ -16,7 +16,7 @@ import pycose.headers
 from scitt_emulator.create_statement import CWTClaims
 from scitt_emulator.verify_statement import verify_statement
 from scitt_emulator.federation import SCITTFederation
-from scitt_emulator.signals import SCITTSignals
+from scitt_emulator.signals import SCITTSignals, SCITTSignalsFederationCreatedEntry
 
 
 # temporary receipt header labels, see draft-birkholz-scitt-receipts
@@ -54,6 +54,8 @@ class SCITTServiceEmulator(ABC):
         service_parameters_path: Path,
         storage_path: Optional[Path] = None,
     ):
+        self.signals = signals
+        self.connect_signals()
         self.storage_path = storage_path
         self.service_parameters_path = service_parameters_path
 
@@ -64,6 +66,11 @@ class SCITTServiceEmulator(ABC):
         if self.service_parameters_path.exists():
             with open(self.service_parameters_path) as f:
                 self.service_parameters = json.load(f)
+
+    def connect_signals(self):
+        self.signal_receiver_submit_claim = self.signals.federation.submit_claim.connect(
+            self.signal_receiver_submit_claim,
+        )
 
     @abstractmethod
     def initialize_service(self):
@@ -107,6 +114,9 @@ class SCITTServiceEmulator(ABC):
         except FileNotFoundError:
             raise EntryNotFoundError(f"Entry {entry_id} not found")
         return claim
+
+    def signal_receiver_submit_claim(self, _sender, claim: bytes) -> None:
+        self.submit_claim(claim, long_running=True)
 
     def submit_claim(self, claim: bytes, long_running=True) -> dict:
         insert_policy = self.service_parameters.get("insertPolicy", DEFAULT_INSERT_POLICY)
@@ -154,10 +164,10 @@ class SCITTServiceEmulator(ABC):
 
         self.signals.federation.created_entry.send(
             self,
-            event_data=SCITTSignalsFederationCreatedEntry(
+            created_entry=SCITTSignalsFederationCreatedEntry(
                 tree_alg=self.tree_alg,
                 entry_id=entry_id,
-                recipt=receipt,
+                receipt=receipt,
                 claim=claim,
                 public_service_parameters=self.public_service_parameters(),
             )

@@ -13,6 +13,7 @@ from scitt_emulator.tree_algs import TREE_ALGS
 from scitt_emulator.plugin_helpers import entrypoint_style_load
 from scitt_emulator.scitt import EntryNotFoundError, ClaimInvalidError, OperationNotFoundError
 from scitt_emulator.signals import SCITTSignals
+from scitt_emulator.signals import SCITTSignalsFederationCreatedEntry
 
 
 def make_error(code: str, msg: str, status_code: int):
@@ -59,6 +60,19 @@ def create_flask_app(config):
     )
     app.scitt_service.initialize_service()
     print(f"Service parameters: {app.service_parameters_path}")
+
+    """
+    app.signals.federation.created_entry.send(
+        app.scitt_service,
+        created_entry=SCITTSignalsFederationCreatedEntry(
+            tree_alg=app.scitt_service.tree_alg,
+            entry_id="TEST",
+            recipt=b"TEST",
+            claim=b"TEST",
+            public_service_parameters=b"TEST",
+        )
+    )
+    """
 
     def is_unavailable():
         return random.random() <= error_rate

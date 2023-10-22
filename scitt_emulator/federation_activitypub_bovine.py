@@ -24,9 +24,10 @@ from bovine.activitystreams import factories_for_actor_object
 from bovine.clients import lookup_uri_with_webfinger
 from mechanical_bull.handlers import HandlerEvent, HandlerAPIVersion
 
+from scitt_emulator.scitt import SCITTServiceEmulator
 from scitt_emulator.federation import SCITTFederation
 from scitt_emulator.tree_algs import TREE_ALGS
-from scitt_emulator.signals import SCITTSignals
+from scitt_emulator.signals import SCITTSignalsFederationCreatedEntry
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,8 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
         self.federate_created_entries_socket_path = self.workspace.joinpath(
             "federate_created_entries_socket",
         )
+
+        self.initialize_service()
 
     def initialize_service(self):
         config_toml_path = pathlib.Path(self.workspace, "config.toml")
@@ -179,24 +182,22 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
 
     def created_entry(
         self,
-        treeAlgorithm: str,
-        entry_id: str,
-        receipt: bytes,
-        claim: bytes,
-        public_service_parameters: bytes,
+        scitt_service: SCITTServiceEmulator,
+        created_entry: SCITTSignalsFederationCreatedEntry,
     ):
+        # NOTE Test of sending signal to submit federated claim -> self.signals.federation.submit_claim.send(self, claim=created_entry.claim)
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.connect(str(self.federate_created_entries_socket_path.resolve()))
             client.send(
                 json.dumps(
                     {
-                        "treeAlgorithm": treeAlgorithm,
+                        "treeAlgorithm": created_entry.tree_alg,
                         "service_parameters": base64.b64encode(
-                            public_service_parameters
+                            created_entry.public_service_parameters
                         ).decode(),
-                        "entry_id": entry_id,
-                        "receipt": base64.b64encode(receipt).decode(),
-                        "claim": base64.b64encode(claim).decode(),
+                        "entry_id": created_entry.entry_id,
+                        "receipt": base64.b64encode(created_entry.receipt).decode(),
+                        "claim": base64.b64encode(created_entry.claim).decode(),
                     }
                 ).encode()
             )
@@ -250,7 +251,8 @@ async def handle(
                     return
 
                 # Send federated claim / receipt to SCITT
-                content = obj.get("content")
+                content_str = obj.get("content")
+                content = json.loads(content_str)
                 if not isinstance(content, dict):
                     return
                 logger.info("Federation received new receipt: %r", content)
@@ -332,11 +334,10 @@ async def federate_created_entries(
         try:
             logger.info("federate_created_entry() Reading... %r", reader)
             content_bytes = await reader.read()
-            content = json.loads(content_bytes.decode())
-            logger.info("federate_created_entry() Read: %r", content)
+            logger.info("federate_created_entry() Read: %r", content_bytes)
             note = (
                 client.object_factory.note(
-                    content=content,
+                    content=content_bytes.decode(),
                 )
                 .as_public()
                 .build()
