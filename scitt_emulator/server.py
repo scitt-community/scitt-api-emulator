@@ -42,7 +42,7 @@ def create_flask_app(config):
 
     for middleware, middleware_config_path in zip(app.config["middleware"], app.config["middleware_config_path"]):
         # app.wsgi_app = middleware(app.wsgi_app, app.signals, middleware_config_path)
-        app.asgi_app = middleware(app.asgi_app, app.signals, middleware_config_path)
+        app.asgi_app = middleware(app, app.signals, middleware_config_path)
 
     error_rate = app.config["error_rate"]
     use_lro = app.config["use_lro"]

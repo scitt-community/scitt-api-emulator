@@ -5,11 +5,14 @@ import json
 import jsonschema
 from werkzeug.wrappers import Request
 from scitt_emulator.client import HttpClient
+from scitt_emulator.signals import SCITTSignals
 
 
 class OIDCAuthMiddleware:
-    def __init__(self, app, config_path):
+    def __init__(self, app, signals: SCITTSignals, config_path: Path):
         self.app = app
+        self.asgi_app = app.asgi_app
+        self.signals = signals
         self.config = {}
         if config_path and config_path.exists():
             self.config = json.loads(config_path.read_text())
@@ -29,7 +32,7 @@ class OIDCAuthMiddleware:
         claims = self.validate_token(headers.get("Authorization", "").replace("Bearer ", ""))
         if "claim_schema" in self.config and claims["iss"] in self.config["claim_schema"]:
             jsonschema.validate(claims, schema=self.config["claim_schema"][claims["iss"]])
-        return await self.app(scope, receive, send)
+        return await self.asgi_app(scope, receive, send)
 
     def validate_token(self, token):
         validation_error = Exception(f"Failed to validate against all issuers: {self.jwks_clients.keys()!s}")

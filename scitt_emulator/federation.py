@@ -10,6 +10,7 @@ from scitt_emulator.signals import SCITTSignals, SCITTSignalsFederationCreatedEn
 class SCITTFederation(ABC):
     def __init__(self, app, signals: SCITTSignals, config_path: Path):
         self.app = app
+        self.asgi_app = app.asgi_app
         self.signals = signals
         self.connect_signals()
         self.config = {}
@@ -17,7 +18,7 @@ class SCITTFederation(ABC):
             self.config = json.loads(config_path.read_text())
 
     async def __call__(self, scope, receive, send):
-        return await self.app(scope, receive, send)
+        return await self.asgi_app(scope, receive, send)
 
     def connect_signals(self):
         self.created_entry = self.signals.federation.created_entry.connect(self.created_entry)
