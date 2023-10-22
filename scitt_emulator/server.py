@@ -141,6 +141,7 @@ def cli(fn):
     def cmd(args):
         app = create_flask_app(
             {
+                "port": args.port,
                 "middleware": args.middleware,
                 "middleware_config_path": args.middleware_config_path,
                 "tree_alg": args.tree_alg,
