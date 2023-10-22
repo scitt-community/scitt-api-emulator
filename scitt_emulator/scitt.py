@@ -72,6 +72,9 @@ class SCITTServiceEmulator(ABC):
             self.signal_receiver_submit_claim,
         )
 
+    def signal_receiver_submit_claim(self, _sender, claim: bytes) -> None:
+        self.submit_claim(claim, long_running=True)
+
     @abstractmethod
     def initialize_service(self):
         raise NotImplementedError
@@ -114,9 +117,6 @@ class SCITTServiceEmulator(ABC):
         except FileNotFoundError:
             raise EntryNotFoundError(f"Entry {entry_id} not found")
         return claim
-
-    def signal_receiver_submit_claim(self, _sender, claim: bytes) -> None:
-        self.submit_claim(claim, long_running=True)
 
     def submit_claim(self, claim: bytes, long_running=True) -> dict:
         insert_policy = self.service_parameters.get("insertPolicy", DEFAULT_INSERT_POLICY)

@@ -61,19 +61,6 @@ def create_flask_app(config):
     app.scitt_service.initialize_service()
     print(f"Service parameters: {app.service_parameters_path}")
 
-    """
-    app.signals.federation.created_entry.send(
-        app.scitt_service,
-        created_entry=SCITTSignalsFederationCreatedEntry(
-            tree_alg=app.scitt_service.tree_alg,
-            entry_id="TEST",
-            recipt=b"TEST",
-            claim=b"TEST",
-            public_service_parameters=b"TEST",
-        )
-    )
-    """
-
     def is_unavailable():
         return random.random() <= error_rate
 
