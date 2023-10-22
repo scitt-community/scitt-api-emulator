@@ -110,39 +110,11 @@ $ python -m venv .venv && \
     . .venv/bin/activate && \
     pip install -U pip setuptools wheel && \
     pip install \
-      toml \
+      tomli-w \
       bovine{-store,-process,-pubsub,-herd,-tool} \
-      'https://codeberg.org/pdxjohnny/bovine/archive/activitystreams_collection_helper_enable_multiple_iterations.tar.gz#egg=bovine&subdirectory=bovine' \
+      'https://codeberg.org/bovine/bovine/archive/main.tar.gz#egg=bovine&subdirectory=bovine' \
       'https://codeberg.org/pdxjohnny/mechanical_bull/archive/event_loop_on_connect_call_handlers.tar.gz#egg=mechanical-bull'
 ```
-
-We create a basic ActivityPub server.
-
-**~/Documents/fediverse/bovine_herd_server/app.py**
-
-```python
-from quart import Quart
-
-from bovine_herd import BovineHerd
-from bovine_pubsub import BovinePubSub
-
-app = Quart(__name__)
-BovinePubSub(app)
-BovineHerd(app)
-```
-
-We'll run on port 5000 to avoid collisions with common default port choices.
-Keep this running for the rest of the tutorial.
-
-> **TODO** Integrate Quart app launch into `SCITTFederationActivityPubBovine`
-> initialization.
-
-```console
-$ rm -rf *sqlite* && BUTCHER_ALLOW_HTTP=1 hypercorn app:app -b 0.0.0.0:5000
-[2023-10-16 02:44:48 -0700] [36467] [INFO] Running on http://0.0.0.0:5000 (CTRL + C to quit)
-```
-
-> Cleanup: `rm -f *sqlite* federation_*/config.toml`
 
 ### Bring up Bob's SCITT Instance
 
@@ -152,13 +124,11 @@ Populate Bob's federation config
 
 ```json
 {
-  "domain": "http://localhost:5000",
   "handle_name": "bob",
-  "workspace": "~/Documents/fediverse/scitt_federation_bob",
   "following": {
     "alice": {
-      "actor_id": "alice@localhost:5000",
-      "domain": "http://localhost:5000"
+      "actor_id": "alice@localhost:7000",
+      "domain": "http://localhost:7000"
     }
   }
 }
@@ -183,13 +153,11 @@ Populate Alice's federation config
 
 ```json
 {
-  "domain": "http://localhost:5000",
   "handle_name": "alice",
-  "workspace": "~/Documents/fediverse/scitt_federation_alice",
   "following": {
     "bob": {
-      "actor_id": "bob@localhost:5000",
-      "domain": "http://localhost:5000"
+      "actor_id": "bob@localhost:6000",
+      "domain": "http://localhost:6000"
     }
   }
 }
