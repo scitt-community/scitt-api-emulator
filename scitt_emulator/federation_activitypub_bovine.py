@@ -20,6 +20,8 @@ import tomli
 import tomli_w
 import bovine
 import aiohttp
+from bovine_herd import BovineHerd
+from bovine_pubsub import BovinePubSub
 from bovine.activitystreams import factories_for_actor_object
 from bovine.clients import lookup_uri_with_webfinger
 from mechanical_bull.handlers import HandlerEvent, HandlerAPIVersion
@@ -83,7 +85,10 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
             "federate_created_entries_socket",
         )
 
-        self.initialize_service()
+        BovinePubSub(app)
+        BovineHerd(app)
+
+        # self.initialize_service()
 
     def initialize_service(self):
         config_toml_path = pathlib.Path(self.workspace, "config.toml")
@@ -185,6 +190,7 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
         scitt_service: SCITTServiceEmulator,
         created_entry: SCITTSignalsFederationCreatedEntry,
     ):
+        return
         # NOTE Test of sending signal to submit federated claim -> self.signals.federation.submit_claim.send(self, claim=created_entry.claim)
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.connect(str(self.federate_created_entries_socket_path.resolve()))
