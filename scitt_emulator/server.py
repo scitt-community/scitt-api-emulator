@@ -92,14 +92,14 @@ def create_flask_app(config):
             return await make_unavailable_error()
         try:
             if use_lro:
-                result = app.scitt_service.submit_claim(await request.get_data(), long_running=True)
+                result = await app.scitt_service.submit_claim(await request.get_data(), long_running=True)
                 headers = {
                     "Location": f"{request.host_url}/operations/{result['operationId']}",
                     "Retry-After": "1"
                 }
                 status_code = 202
             else:
-                result = app.scitt_service.submit_claim(await request.get_data(), long_running=False)
+                result = await app.scitt_service.submit_claim(await request.get_data(), long_running=False)
                 headers = {
                     "Location": f"{request.host_url}/entries/{result['entryId']}",
                 }

@@ -1,5 +1,6 @@
 import sys
 import json
+import types
 import atexit
 import base64
 import socket
@@ -8,6 +9,7 @@ import logging
 import asyncio
 import pathlib
 import tempfile
+import functools
 import traceback
 import contextlib
 import subprocess
@@ -30,7 +32,7 @@ from mechanical_bull.handlers import HandlerEvent, HandlerAPIVersion
 from scitt_emulator.scitt import SCITTServiceEmulator
 from scitt_emulator.federation import SCITTFederation
 from scitt_emulator.tree_algs import TREE_ALGS
-from scitt_emulator.signals import SCITTSignalsFederationCreatedEntry
+from scitt_emulator.signals import SCITTSignals, SCITTSignalsFederationCreatedEntry
 
 logger = logging.getLogger(__name__)
 
@@ -80,17 +82,14 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
         BovinePubSub(app)
         BovineHerd(app)
 
-        @app.before_serving
-        async def initialize_service():
-            await self.initialize_service()
-            # asyncio.create_task(self.initialize_service())
-            # app.add_background_task(self.initialize_service)
+        app.before_serving(self.initialize_service)
 
     async def initialize_service(self):
         # TODO Better domain / fqdn building
         self.domain = f'http://127.0.0.1:{self.app.config["port"]}'
 
         config_toml_path = pathlib.Path(self.workspace, "config.toml")
+        config_toml_path.unlink()
         if not config_toml_path.exists():
             logger.info("Actor client config does not exist, creating...")
             cmd = [
@@ -112,8 +111,6 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
         config_toml_obj[self.handle_name]["handlers"][
             inspect.getmodule(sys.modules[__name__]).__spec__.name
         ] = {
-            # TODO Sending signal to submit federated claim
-            # signals.federation.submit_claim.send(self, claim=created_entry.claim)
             "signals": self.signals,
             "following": self.config.get("following", {}),
         }
@@ -139,34 +136,9 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
             logger.info("Actor key added in database")
 
         # Run client handlers
-        """
-        cmd = [
-            sys.executable,
-            "-um",
-            "mechanical_bull.run",
-        ]
-        self.mechanical_bull_proc = subprocess.Popen(
-            cmd,
-            cwd=self.workspace,
-        )
-        atexit.register(self.mechanical_bull_proc.terminate)
-        """
-
-        def build_handler(handler, value):
-            import importlib
-            from functools import partial
-
-            func = importlib.import_module(handler).handle
-
-            if isinstance(value, dict):
-                return partial(func, **value)
-            return func
-
-        def load_handlers(handlers):
-            return [build_handler(handler, value) for handler, value in handlers.items()]
-
         async def mechanical_bull_loop(config):
             from mechanical_bull.event_loop import loop
+            from mechanical_bull.handlers import load_handlers, build_handler
 
             async with asyncio.TaskGroup() as taskgroup:
                 for client_name, value in config.items():
@@ -174,59 +146,40 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
                         handlers = load_handlers(value["handlers"])
                         taskgroup.create_task(loop(client_name, value, handlers))
 
-        # self.app.add_background_task(mechanical_bull_loop, config_toml_obj)
-
-    def created_entry(
-        self,
-        scitt_service: SCITTServiceEmulator,
-        created_entry: SCITTSignalsFederationCreatedEntry,
-    ):
-        return
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-            client.connect(str(self.federate_created_entries_socket_path.resolve()))
-            client.send(
-                json.dumps(
-                    {
-                        "treeAlgorithm": created_entry.tree_alg,
-                        "service_parameters": base64.b64encode(
-                            created_entry.public_service_parameters
-                        ).decode(),
-                        "entry_id": created_entry.entry_id,
-                        "receipt": base64.b64encode(created_entry.receipt).decode(),
-                        "claim": base64.b64encode(created_entry.claim).decode(),
-                    }
-                ).encode()
-            )
-            client.close()
+        self.app.add_background_task(mechanical_bull_loop, config_toml_obj)
 
 
 async def handle(
     client: bovine.BovineClient,
     data: dict,
     # config.toml arguments
+    signals: SCITTSignals = None,
     following: dict[str, Follow] = None,
-    federate_created_entries_socket_path: Path = None,
     raise_on_follow_failure: bool = False,
     # handler arguments
     handler_event: HandlerEvent = None,
     handler_api_version: HandlerAPIVersion = HandlerAPIVersion.unstable,
 ):
     try:
-        logging.info(f"{__file__}:handle(handler_event={handler_event})")
+        logger.info(f"{__file__}:handle(handler_event={handler_event})")
         match handler_event:
             case HandlerEvent.OPENED:
                 # Listen for events from SCITT
-                asyncio.create_task(
-                    federate_created_entries(
-                        client, federate_created_entries_socket_path
-                    )
-                )
+                # TODO Do this without using a client, server side
+                async def federate_created_entries_pass_client(
+                    sender: SCITTServiceEmulator,
+                    created_entry: SCITTSignalsFederationCreatedEntry = None,
+                ):
+                    nonlocal client
+                    await federate_created_entries(client, sender, created_entry)
+                client.federate_created_entries = types.MethodType(signals.federation.created_entry.connect(federate_created_entries_pass_client), client)
+                # print(signals.federation.created_entry.connect(federate_created_entries))
                 # Preform ActivityPub related init
                 if following:
                     try:
                         async with asyncio.TaskGroup() as tg:
                             for key, value in following.items():
-                                logging.info("Following... %r", value)
+                                logger.info("Following... %r", value)
                                 tg.create_task(init_follow(client, **value))
                     except (ExceptionGroup, BaseExceptionGroup) as error:
                         if raise_on_follow_failure:
@@ -275,19 +228,10 @@ async def handle(
 
                     logger.info("Receipt verified")
 
-                    return
+                    # Send signal to submit federated claim
                     # TODO Announce that this entry ID was created via
                     # federation to avoid an infinate loop
-                    scitt_emulator.client.submit_claim(
-                        home_scitt_url,
-                        claim,
-                        str(Path(tempdir, "home_receipt").resolve()),
-                        str(Path(tempdir, "home_entry_id").resolve()),
-                        scitt_emulator.client.HttpClient(
-                            home_scitt_token,
-                            home_scitt_cacert,
-                        ),
-                    )
+                    await signals.federation.submit_claim.send_async(client, claim=claim)
     except Exception as ex:
         logger.error(ex)
         logger.exception(ex)
@@ -325,14 +269,23 @@ async def init_follow(client, retry: int = 5, **kwargs):
 async def federate_created_entries(
     client: bovine.BovineClient,
     sender: SCITTServiceEmulator,
+    created_entry: SCITTSignalsFederationCreatedEntry = None,
 ):
     try:
-        logger.info("federate_created_entry() Reading... %r", reader)
-        content_bytes = await reader.read()
-        logger.info("federate_created_entry() Read: %r", content_bytes)
+        logger.info("federate_created_entry() created_entry: %r", created_entry)
         note = (
             client.object_factory.note(
-                content=content_bytes.decode(),
+                content=json.dumps(
+                    {
+                        "treeAlgorithm": created_entry.tree_alg,
+                        "service_parameters": base64.b64encode(
+                            created_entry.public_service_parameters
+                        ).decode(),
+                        "entry_id": created_entry.entry_id,
+                        "receipt": base64.b64encode(created_entry.receipt).decode(),
+                        "claim": base64.b64encode(created_entry.claim).decode(),
+                    }
+                )
             )
             .as_public()
             .build()
@@ -340,9 +293,6 @@ async def federate_created_entries(
         activity = client.activity_factory.create(note).build()
         logger.info("Sending... %r", activity)
         await client.send_to_outbox(activity)
-
-        writer.close()
-        await writer.wait_closed()
 
         # DEBUG NOTE Dumping outbox
         print("client:", client)
