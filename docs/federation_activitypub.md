@@ -125,6 +125,7 @@ Populate Bob's federation config
 ```json
 {
   "handle_name": "bob",
+  "workspace": "~/Documents/fediverse/scitt_federation_bob/",
   "following": {
     "alice": {
       "actor_id": "alice@localhost:7000",
@@ -154,6 +155,7 @@ Populate Alice's federation config
 ```json
 {
   "handle_name": "alice",
+  "workspace": "~/Documents/fediverse/scitt_federation_alice/",
   "following": {
     "bob": {
       "actor_id": "bob@localhost:6000",
