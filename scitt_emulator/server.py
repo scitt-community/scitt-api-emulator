@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from io import BytesIO
 import random
+import logging
 
 from quart import Quart, request, send_file, make_response
 from blinker import Namespace
@@ -126,6 +127,7 @@ def create_flask_app(config):
 def cli(fn):
     parser = fn()
     parser.add_argument("-p", "--port", type=int, default=8000)
+    parser.add_argument("--log", type=str, default="INFO")
     parser.add_argument("--error-rate", type=float, default=0.01)
     parser.add_argument("--use-lro", action="store_true", help="Create operations for submissions")
     parser.add_argument("--tree-alg", required=True, choices=list(TREE_ALGS.keys()))
@@ -139,6 +141,7 @@ def cli(fn):
     parser.add_argument("--middleware-config-path", type=Path, nargs="*", default=[])
 
     def cmd(args):
+        logging.basicConfig(level=getattr(logging, args.log.upper(), "INFO"))
         app = create_flask_app(
             {
                 "port": args.port,
