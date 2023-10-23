@@ -172,7 +172,13 @@ async def handle(
                 ):
                     nonlocal client
                     await federate_created_entries(client, sender, created_entry)
-                client.federate_created_entries = types.MethodType(signals.federation.created_entry.connect(federate_created_entries_pass_client), client)
+
+                client.federate_created_entries = types.MethodType(
+                    signals.federation.created_entry.connect(
+                        federate_created_entries_pass_client
+                    ),
+                    client,
+                )
                 # print(signals.federation.created_entry.connect(federate_created_entries))
                 # Preform ActivityPub related init
                 if following:
@@ -231,7 +237,9 @@ async def handle(
                     # Send signal to submit federated claim
                     # TODO Announce that this entry ID was created via
                     # federation to avoid an infinate loop
-                    await signals.federation.submit_claim.send_async(client, claim=claim)
+                    await signals.federation.submit_claim.send_async(
+                        client, claim=claim
+                    )
     except Exception as ex:
         logger.error(ex)
         logger.exception(ex)
