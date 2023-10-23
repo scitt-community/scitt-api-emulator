@@ -39,39 +39,6 @@ logger = logging.getLogger(__name__)
 import pprint
 
 
-@dataclasses.dataclass
-class Follow:
-    actor_id: str
-    domain: str = None
-
-
-async def get_actor_url(
-    domain: str,
-    handle_name: str = None,
-    did_key: str = None,
-    session: aiohttp.ClientSession = None,
-):
-    if did_key:
-        lookup = did_key
-    elif handle_name:
-        # Get domain and port without protocol
-        url_parse_result = urllib.parse.urlparse(domain)
-        actor_id = f"{handle_name}@{url_parse_result.netloc}"
-        lookup = f"acct:{actor_id}"
-    else:
-        raise ValueError(
-            f"One of the following keyword arguments must be provided: handle_name, did_key"
-        )
-    async with contextlib.AsyncExitStack() as async_exit_stack:
-        # Create session if not given
-        if not session:
-            session = await async_exit_stack.enter_async_context(
-                aiohttp.ClientSession(trust_env=True),
-            )
-        url, _ = await lookup_uri_with_webfinger(session, lookup, domain=domain)
-        return url
-
-
 class SCITTFederationActivityPubBovine(SCITTFederation):
     def __init__(self, app, signals, config_path):
         super().__init__(app, signals, config_path)
@@ -154,7 +121,7 @@ async def handle(
     data: dict,
     # config.toml arguments
     signals: SCITTSignals = None,
-    following: dict[str, Follow] = None,
+    following: dict[str, dict] = None,
     raise_on_follow_failure: bool = False,
     # handler arguments
     handler_event: HandlerEvent = None,
@@ -179,7 +146,6 @@ async def handle(
                     ),
                     client,
                 )
-                # print(signals.federation.created_entry.connect(federate_created_entries))
                 # Preform ActivityPub related init
                 if following:
                     try:
