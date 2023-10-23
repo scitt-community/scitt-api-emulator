@@ -20,6 +20,7 @@ import tomli
 import tomli_w
 import bovine
 import aiohttp
+from bovine_store import BovineAdminStore
 from bovine_herd import BovineHerd
 from bovine_pubsub import BovinePubSub
 from bovine.activitystreams import factories_for_actor_object
@@ -82,9 +83,12 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
         @app.before_serving
         async def initialize_service():
             await self.initialize_service()
+            # asyncio.create_task(self.initialize_service())
+            # app.add_background_task(self.initialize_service)
 
     async def initialize_service(self):
-        self.domain = f'127.0.0.1:{self.app.config["port"]}'
+        # TODO Better domain / fqdn building
+        self.domain = f'http://127.0.0.1:{self.app.config["port"]}'
 
         config_toml_path = pathlib.Path(self.workspace, "config.toml")
         if not config_toml_path.exists():
@@ -118,48 +122,19 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
             config_toml_obj[self.handle_name]["secret"],
         )
 
-        # TODO XXX ERROR Not bound yet, can we resolve via self.app?
-        actor_url = await get_actor_url(
-            self.domain,
-            did_key=did_key,
-        )
-        # TODO take BOVINE_DB_URL from config, populate env on call to tool if
-        # NOT already set in env.
-        # Create the actor in the database, set
-        # BOVINE_DB_URL="sqlite://${HOME}/path/to/bovine.sqlite3" or see
-        # https://codeberg.org/bovine/bovine/src/branch/main/bovine_herd#configuration
-        # for more options.
+        bovine_store = self.app.config["bovine_store"]
+        _account, actor_url = await bovine_store.get_account_url_for_identity(did_key)
         if actor_url:
             logger.info("Existing actor found. actor_url is %s", actor_url)
         else:
             logger.info("Actor not found, creating in database...")
-            cmd = [
-                sys.executable,
-                "-um",
-                "bovine_tool.register",
-                self.handle_name,
-                "--domain",
-                self.domain,
-            ]
-            register_output = subprocess.check_output(
-                cmd,
-                cwd=self.workspace,
-            )
-            bovine_name = register_output.decode().strip().split()[-1]
+            bovine_store = BovineAdminStore(domain=self.domain)
+            bovine_name = await bovine_store.register(self.handle_name)
             logger.info("Created actor with database name %s", bovine_name)
-
-            cmd = [
-                sys.executable,
-                "-um",
-                "bovine_tool.manage",
+            await bovine_store.add_identity_string_to_actor(
                 bovine_name,
-                "--did_key",
                 "key0",
                 did_key,
-            ]
-            subprocess.check_call(
-                cmd,
-                cwd=self.workspace,
             )
             logger.info("Actor key added in database")
 
@@ -199,7 +174,7 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
                         handlers = load_handlers(value["handlers"])
                         taskgroup.create_task(loop(client_name, value, handlers))
 
-        self.app.add_background_task(mechanical_bull_loop, config_toml_obj)
+        # self.app.add_background_task(mechanical_bull_loop, config_toml_obj)
 
     def created_entry(
         self,
