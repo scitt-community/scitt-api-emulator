@@ -53,10 +53,9 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
 
     async def initialize_service(self):
         # TODO Better domain / fqdn building
-        self.domain = f'http://127.0.0.1:{self.app.config["port"]}'
+        self.domain = f'http://localhost:{self.app.config["port"]}'
 
         config_toml_path = pathlib.Path(self.workspace, "config.toml")
-        config_toml_path.unlink()
         if not config_toml_path.exists():
             logger.info("Actor client config does not exist, creating...")
             cmd = [
@@ -195,7 +194,7 @@ async def handle(
                     service_parameters_path.write_bytes(service_parameters)
 
                     clazz = TREE_ALGS[treeAlgorithm]
-                    service = clazz(service_parameters_path=service_parameters_path)
+                    service = clazz(signals=SCITTSignals(), service_parameters_path=service_parameters_path)
                     service.verify_receipt(cose_path, receipt_path)
 
                     logger.info("Receipt verified")
@@ -222,8 +221,6 @@ async def _init_follow(client, actor_id: str, domain: str = None, retry: int = 5
     )
     if not url:
         raise WebFingerLookupNotFoundError(f"actor_id: {actor_id}, domain: {domain}")
-    remote_data = await client.get(url)
-    remote_inbox = remote_data["inbox"]
     activity = client.activity_factory.follow(
         url,
     ).build()
@@ -235,7 +232,7 @@ async def init_follow(client, retry: int = 5, **kwargs):
     for i in range(0, retry):
         try:
             return await _init_follow(client, retry=retry, **kwargs)
-        except WebFingerLookupNotFoundError as error:
+        except Exception as error:
             logger.error(repr(error))
             await asyncio.sleep(2**i)
 
