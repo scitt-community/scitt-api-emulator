@@ -140,10 +140,10 @@ Start the server
 ```console
 $ rm -rf workspace_bob/
 $ mkdir -p workspace_bob/storage/operations
-$ BOVINE_DB_URL="sqlite://${HOME}/Documents/fediverse/bovine_herd_server/bovine.sqlite3" scitt-emulator server \
-    --workspace workspace_bob/ --tree-alg CCF --port 6000 \
-    --federation scitt_emulator.federation_activitypub_bovine:SCITTFederationActivityPubBovine \
-    --federation-config-path ${HOME}/Documents/fediverse/scitt_federation_bob/config.json
+$ BOVINE_DB_URL="sqlite://${HOME}/Documents/fediverse/scitt_federation_bob/bovine.sqlite3" scitt-emulator server \
+    --workspace ${HOME}/Documents/fediverse/scitt_federation_bob/workspace_bob/ --tree-alg CCF --port 6000 \
+    --middleware scitt_emulator.federation_activitypub_bovine:SCITTFederationActivityPubBovine \
+    --middleware-config-path ${HOME}/Documents/fediverse/scitt_federation_bob/config.json
 ```
 
 ### Bring up Alice's SCITT Instance
@@ -170,10 +170,10 @@ Start the server
 ```console
 $ rm -rf workspace_alice/
 $ mkdir -p workspace_alice/storage/operations
-$ BOVINE_DB_URL="sqlite://${HOME}/Documents/fediverse/bovine_herd_server/bovine.sqlite3" scitt-emulator server \
-    --workspace workspace_alice/ --tree-alg CCF --port 7000 \
-    --federation scitt_emulator.federation_activitypub_bovine:SCITTFederationActivityPubBovine \
-    --federation-config-path ${HOME}/Documents/fediverse/scitt_federation_alice/config.json
+$ BOVINE_DB_URL="sqlite://${HOME}/Documents/fediverse/scitt_federation_alice/bovine.sqlite3" scitt-emulator server \
+    --workspace ${HOME}/Documents/fediverse/scitt_federation_alice/workspace_alice/ --tree-alg CCF --port 7000 \
+    --middleware scitt_emulator.federation_activitypub_bovine:SCITTFederationActivityPubBovine \
+    --middleware-config-path ${HOME}/Documents/fediverse/scitt_federation_alice/config.json
 ```
 
 ### Create and Submit Claim to Bob's Instance
