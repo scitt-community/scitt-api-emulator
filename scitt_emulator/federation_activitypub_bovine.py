@@ -1,3 +1,4 @@
+import os
 import sys
 import json
 import types
@@ -46,6 +47,14 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
         self.handle_name = self.config["handle_name"]
         self.fqdn = self.config.get("fqdn", None)
         self.workspace = Path(self.config["workspace"]).expanduser()
+
+        self.bovine_db_url = self.config.get("bovine_db_url", None)
+        if self.bovine_db_url and self.bovine_db_url.startswith("~"):
+            self.bovine_db_url = str(Path(self.bovine_db_url).expanduser())
+        # TODO Pass this as variable
+        if not "BOVINE_DB_URL" in os.environ and self.bovine_db_url:
+            os.environ["BOVINE_DB_URL"] = self.bovine_db_url
+            logging.debug(f"Set BOVINE_DB_URL to {self.bovine_db_url}")
 
         BovinePubSub(app)
         BovineHerd(app)

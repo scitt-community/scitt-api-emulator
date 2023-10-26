@@ -125,11 +125,12 @@ Populate Bob's federation config
 ```json
 {
   "handle_name": "bob",
+  "fqdn": "scitt.bob.chadig.com",
   "workspace": "~/Documents/fediverse/scitt_federation_bob/",
+  "bovine_db_url": "~/Documents/fediverse/scitt_federation_bob/bovine.sqlite3",
   "following": {
     "alice": {
-      "actor_id": "alice@localhost:7000",
-      "domain": "http://localhost:7000"
+      "actor_id": "alice@scitt.alice.chadig.com",
     }
   }
 }
@@ -140,7 +141,7 @@ Start the server
 ```console
 $ rm -rf workspace_bob/
 $ mkdir -p workspace_bob/storage/operations
-$ BOVINE_DB_URL="sqlite://${HOME}/Documents/fediverse/scitt_federation_bob/bovine.sqlite3" scitt-emulator server \
+$ scitt-emulator server \
     --workspace ${HOME}/Documents/fediverse/scitt_federation_bob/workspace_bob/ --tree-alg CCF --port 6000 \
     --middleware scitt_emulator.federation_activitypub_bovine:SCITTFederationActivityPubBovine \
     --middleware-config-path ${HOME}/Documents/fediverse/scitt_federation_bob/config.json
@@ -155,11 +156,12 @@ Populate Alice's federation config
 ```json
 {
   "handle_name": "alice",
+  "fqdn": "scitt.alice.chadig.com",
   "workspace": "~/Documents/fediverse/scitt_federation_alice/",
+  "bovine_db_url": "~/Documents/fediverse/scitt_federation_alice/bovine.sqlite3",
   "following": {
     "bob": {
-      "actor_id": "bob@localhost:6000",
-      "domain": "http://localhost:6000"
+      "actor_id": "bob@scitt.bob.chadig.com"
     }
   }
 }
@@ -170,7 +172,7 @@ Start the server
 ```console
 $ rm -rf workspace_alice/
 $ mkdir -p workspace_alice/storage/operations
-$ BOVINE_DB_URL="sqlite://${HOME}/Documents/fediverse/scitt_federation_alice/bovine.sqlite3" scitt-emulator server \
+$ scitt-emulator server \
     --workspace ${HOME}/Documents/fediverse/scitt_federation_alice/workspace_alice/ --tree-alg CCF --port 7000 \
     --middleware scitt_emulator.federation_activitypub_bovine:SCITTFederationActivityPubBovine \
     --middleware-config-path ${HOME}/Documents/fediverse/scitt_federation_alice/config.json
