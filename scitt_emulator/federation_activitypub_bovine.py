@@ -207,7 +207,10 @@ async def handle(
                     service_parameters_path.write_bytes(service_parameters)
 
                     clazz = TREE_ALGS[treeAlgorithm]
-                    service = clazz(signals=SCITTSignals(), service_parameters_path=service_parameters_path)
+                    service = clazz(
+                        signals=SCITTSignals(),
+                        service_parameters_path=service_parameters_path,
+                    )
                     service.verify_receipt(cose_path, receipt_path)
 
                     logger.info("Receipt verified")
