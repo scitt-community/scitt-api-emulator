@@ -44,6 +44,7 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
         super().__init__(app, signals, config_path)
 
         self.handle_name = self.config["handle_name"]
+        self.fqdn = self.config.get("fqdn", None)
         self.workspace = Path(self.config["workspace"]).expanduser()
 
         BovinePubSub(app)
@@ -53,7 +54,10 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
 
     async def initialize_service(self):
         # TODO Better domain / fqdn building
-        self.domain = f'http://localhost:{self.app.config["port"]}'
+        if self.fqdn:
+            self.domain = self.fqdn
+        else:
+            self.domain = f'http://localhost:{self.app.config["port"]}'
 
         config_toml_path = pathlib.Path(self.workspace, "config.toml")
         if not config_toml_path.exists():
