@@ -129,7 +129,7 @@ def test_docs_federation_activitypub_bovine(tmp_path):
                 socket.SOCK_STREAM,
                 6,
                 "",
-                ("127.0.0.1", services[handle_name].server.port),
+                ("127.0.0.1", services[handle_name].port),
             )
         ]
 
@@ -147,9 +147,9 @@ def test_docs_federation_activitypub_bovine(tmp_path):
             # Test of resolution
             assert (
                 socket.getaddrinfo(f"scitt.{handle_name}.example.com", 0)[0][-1][-1]
-                == services[handle_name].server.port
+                == services[handle_name].port
             )
-            print(handle_name, "@", services[handle_name].server.port)
+            print(handle_name, "@", services[handle_name].port)
         # Test that if we submit to one claims end up in the others
         for handle_name, service in services.items():
             our_service = services[handle_name]
