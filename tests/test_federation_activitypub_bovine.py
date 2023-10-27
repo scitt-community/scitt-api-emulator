@@ -196,9 +196,7 @@ def test_docs_federation_activitypub_bovine(tmp_path):
 
             # download claim from every other service
             for their_handle_name, their_service in their_services.items():
-                their_claim = (
-                    claim_path.with_suffix(f"federated.{their_handle_name}"),
-                )
+                their_claim = claim_path.with_suffix(f".federated.{their_handle_name}")
                 command = [
                     "client",
                     "retrieve-claim",

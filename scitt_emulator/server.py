@@ -113,7 +113,7 @@ def create_flask_app(config):
         if is_unavailable():
             return await make_unavailable_error()
         try:
-            operation = app.scitt_service.get_operation(operation_id)
+            operation = await app.scitt_service.get_operation(operation_id)
         except OperationNotFoundError as e:
             return await make_error("operationNotFound", str(e), 404)
         headers = {}
