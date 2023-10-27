@@ -6,6 +6,7 @@ import time
 import json
 import copy
 import types
+import socket
 import pathlib
 import tempfile
 import textwrap
@@ -99,11 +100,7 @@ def test_docs_federation_activitypub_bovine(tmp_path):
                     "fqdn": f"scitt.{handle_name}.example.com",
                     "workspace": str(tmp_path / handle_name),
                     "bovine_db_url": str(tmp_path / handle_name / "bovine.sqlite3"),
-                    "followig": {
-                        "alice": {
-                            "actor_id": "alice@scitt.alice.chadig.com",
-                        }
-                    },
+                    "following": following,
                 }
             )
         )
@@ -118,9 +115,43 @@ def test_docs_federation_activitypub_bovine(tmp_path):
             }
         )
 
+    old_socket_getaddrinfo = socket.getaddrinfo
+
+    def socket_getaddrinfo_map_service_ports(host, *args, **kwargs):
+        # Map f"scitt.{handle_name}.example.com" to various local ports
+        nonlocal services
+        if "scitt" not in host:
+            return old_socket_getaddrinfo(host, *args, **kwargs)
+        _, handle_name, _, _ = host.split(".")
+        return [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                6,
+                "",
+                ("127.0.0.1", services[handle_name].server.port),
+            )
+        ]
+
     with contextlib.ExitStack() as exit_stack:
+        # Ensure that connect calls to them resolve as we want
+        exit_stack.enter_context(
+            unittest.mock.patch(
+                "socket.getaddrinfo",
+                wraps=socket_getaddrinfo_map_service_ports,
+            )
+        )
+        # Start all the services
         for handle_name, service in services.items():
             services[handle_name] = exit_stack.enter_context(service)
+            # Test of resolution
+            assert (
+                socket.getaddrinfo(f"scitt.{handle_name}.example.com", 0)[0][-1][-1]
+                == services[handle_name].server.port
+            )
+            print(handle_name, "@", services[handle_name].server.port)
+        # Test that if we submit to one claims end up in the others
+        for handle_name, service in services.items():
             our_service = services[handle_name]
             their_services = {
                 filter_services_handle_name: their_service
@@ -163,7 +194,7 @@ def test_docs_federation_activitypub_bovine(tmp_path):
             receipt_path.unlink()
             assert os.path.exists(entry_id_path)
 
-            # download from other service claim
+            # download claim from every other service
             for their_handle_name, their_service in their_services.items():
                 their_claim = (
                     claim_path.with_suffix(f"federated.{their_handle_name}"),
@@ -178,6 +209,7 @@ def test_docs_federation_activitypub_bovine(tmp_path):
                     "--url",
                     their_service.url,
                 ]
+                # TODO Retry with backoff with cap
                 execute_cli(command)
                 assert os.path.exists(their_claim)
                 their_claim.unlink()
