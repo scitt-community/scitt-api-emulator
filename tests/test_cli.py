@@ -8,7 +8,6 @@ import pytest
 import jwt
 import jwcrypto
 from flask import Flask, jsonify, send_file
-from werkzeug.serving import make_server
 from scitt_emulator import cli, server
 from scitt_emulator.oidc import OIDCAuthMiddleware
 
@@ -31,15 +30,70 @@ class Service:
 
     def __enter__(self):
         app = self.create_flask_app(self.config)
+        import sys
         if hasattr(app, "service_parameters_path"):
             self.service_parameters_path = app.service_parameters_path
         self.host = "127.0.0.1"
-        self.server = make_server(self.host, 0, app)
+        # self.server = make_server(self.host, 0, app)
+        # TODO Wrapper on run pass port via Queue, sys audithook or config.log
+        # for app.run (hypercorn asyncio.run.worker_serve)
+        def mythread():
+            def capture_port(event, *args):
+                print("event", event)
+                if event not in ("socket.bind", "socket.__new__"):
+                    return
+                socket = args[0][0]
+                print("socket", socket)
+                try:
+                    breakpoint()
+                    print("socket", socket.getsockname())
+                except:
+                    import traceback
+                    traceback.print_exc()
+            # sys.addaudithook(capture_port)
+            import socket
+
+            old_socket_bind = socket.socket.bind
+
+            def socket_bind(*args, **kwargs):
+                print(args, kwargs)
+                return old_socket_bind(*args, **kwargs)
+
+            import hypercorn.config
+
+            old_create_sockets = hypercorn.config.Config.create_sockets
+
+            class MockConfig(hypercorn.config.Config):
+                def create_sockets(self, *args, **kwargs):
+                    sockets = old_create_sockets(self, *args, **kwargs)
+                    port = sockets.insecure_sockets[0].getsockname()[1]
+                    return sockets
+
+            try:
+                import unittest.mock
+                with unittest.mock.patch(
+                    "quart.app.HyperConfig",
+                    side_effect=MockConfig,
+                ):
+
+                    print("running...")
+                    print()
+                    print(app.run(port=0))
+            except:
+                import traceback
+                traceback.print_exc()
+
+        import multiprocessing
+        self.thread = multiprocessing.Process(name="server", target=mythread)
+        self.thread.start()
+
+        import time
+        time.sleep(60)
+        sys.exit(0)
+
         port = self.server.port
         self.url = f"http://{self.host}:{port}"
         app.url = self.url
-        self.thread = threading.Thread(name="server", target=self.server.serve_forever)
-        self.thread.start()
         return self
 
     def __exit__(self, *args):
