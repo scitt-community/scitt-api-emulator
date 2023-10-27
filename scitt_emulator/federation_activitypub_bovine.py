@@ -46,6 +46,8 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
 
         self.handle_name = self.config["handle_name"]
         self.fqdn = self.config.get("fqdn", None)
+        # This is the federation middleware workspace, not the same as the
+        # tree_alg class's workspace
         self.workspace = Path(self.config["workspace"]).expanduser()
 
         self.bovine_db_url = self.config.get("bovine_db_url", None)

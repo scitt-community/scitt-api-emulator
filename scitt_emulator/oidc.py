@@ -9,7 +9,7 @@ from scitt_emulator.signals import SCITTSignals
 
 
 class OIDCAuthMiddleware:
-    def __init__(self, app, signals: SCITTSignals, config_path: Path):
+    def __init__(self, app, signals: SCITTSignals, config_path):
         self.app = app
         self.asgi_app = app.asgi_app
         self.signals = signals
