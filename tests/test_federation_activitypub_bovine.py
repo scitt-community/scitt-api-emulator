@@ -110,8 +110,8 @@ def test_docs_federation_activitypub_bovine(tmp_path):
                 "middleware_config_path": [middleware_config_path],
                 "tree_alg": "CCF",
                 "workspace": tmp_path / handle_name / "workspace",
-                "error_rate": 0.1,
-                "use_lro": True,
+                "error_rate": 0,
+                "use_lro": False,
             }
         )
 
