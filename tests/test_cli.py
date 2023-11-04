@@ -6,6 +6,7 @@ import json
 import types
 import socket
 import pathlib
+import asyncio
 import aiohttp.resolver
 import functools
 import threading
@@ -28,11 +29,11 @@ old_socket_getaddrinfo = socket.getaddrinfo
 old_create_sockets = hypercorn.config.Config.create_sockets
 
 
-def load_services_from_services_path(services):
+def load_services_from_services_path(services, host):
     if isinstance(services, (str, pathlib.Path)):
         services_path = pathlib.Path(services)
         if not services_path.exists():
-            return old_socket_getaddrinfo(host, *args, **kwargs)
+            raise socket.gaierror(f"{host} has not bound yet")
         services_content = services_path.read_text()
         services_dict = json.loads(services_content)
         services = {
@@ -44,9 +45,12 @@ def load_services_from_services_path(services):
 def socket_getaddrinfo_map_service_ports(services, host, *args, **kwargs):
     # Map f"scitt.{handle_name}.example.com" to various local ports
     if "scitt." not in host:
+        print('"scitt." not in host', host, args, kwargs)
         return old_socket_getaddrinfo(host, *args, **kwargs)
     _, handle_name, _, _ = host.split(".")
-    services = load_services_from_services_path(services)
+    services = load_services_from_services_path(services, host)
+    if handle_name not in services:
+        raise socket.gaierror(f"{host} has not bound yet")
     return [
         (
             socket.AF_INET,
@@ -101,14 +105,24 @@ class Service:
                     if "scitt." not in host:
                         return old_socket_getaddrinfo(host, *args, **kwargs)
                     _, handle_name, _, _ = host.split(".")
-                    services = load_services_from_services_path(services)
+                    error = None
+                    for i in range(0, 5):
+                        try:
+                            services = load_services_from_services_path(services, host)
+                            if handle_name not in services:
+                                raise socket.gaierror(f"{host} has not bound yet")
+                        except socket.gaierror as e:
+                            error = e
+                            await asyncio.sleep(1)
+                    if error:
+                        raise error
                     return [
                         {
                             "hostname": host,
                             "host": "127.0.0.1",
                             "port": services[handle_name].port,
                             "family": socket.AF_INET,
-                            "proto": socket.SOCK_STREAM,
+                            "proto": socket.IPPROTO_TCP,
                             "flags": socket.AI_ADDRCONFIG,
                         }
                     ]
@@ -136,14 +150,6 @@ class Service:
                                 )
                             )
                         )
-                        # exit_stack.enter_context(
-                        #     unittest.mock.patch(
-                        #         "asyncio.base_events.BaseEventLoop.getaddrinfo",
-                        #         wraps=make_loop_getaddrinfo_map_service_ports(
-                        #             services,
-                        #         )
-                        #     )
-                        # )
                         return sockets
 
                 exit_stack.enter_context(

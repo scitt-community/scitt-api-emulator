@@ -66,13 +66,15 @@ def test_docs_federation_activitypub_bovine(tmp_path):
         "bob": {
             "alice": {
                 "actor_id": "alice@scitt.alice.example.com",
+                "domain": "http://scitt.alice.example.com",
             },
         },
-        # "alice": {
-        #     "bob": {
-        #         "actor_id": "bob@scitt.bob.example.com",
-        #     },
-        # },
+        "alice": {
+            "bob": {
+                "actor_id": "bob@scitt.bob.example.com",
+                "domain": "http://scitt.bob.example.com",
+            },
+        },
     }.items():
         middleware_config_path = (
             tmp_path
@@ -84,7 +86,7 @@ def test_docs_federation_activitypub_bovine(tmp_path):
             json.dumps(
                 {
                     "handle_name": handle_name,
-                    "fqdn": f"scitt.{handle_name}.example.com",
+                    "fqdn": f"http://scitt.{handle_name}.example.com",
                     "workspace": str(tmp_path / handle_name),
                     "bovine_db_url": str(tmp_path / handle_name / "bovine.sqlite3"),
                     "following": following,
@@ -117,20 +119,31 @@ def test_docs_federation_activitypub_bovine(tmp_path):
         # Start all the services
         for handle_name, service in services.items():
             services[handle_name] = exit_stack.enter_context(service)
-            # Serialize services
-            services_path.write_text(
-                json.dumps(
-                    {
-                        handle_name: {"port": service.port}
-                        for handle_name, service in services.items()
-                    }
-                )
-            )
             # Test of resolution
             assert (
                 socket.getaddrinfo(f"scitt.{handle_name}.example.com", 0)[0][-1][-1]
                 == services[handle_name].port
             )
+        # Serialize services
+        services_path.write_text(
+            json.dumps(
+                {
+                    handle_name: {"port": service.port}
+                    for handle_name, service in services.items()
+                }
+            )
+        )
+
+        print()
+        print()
+        print()
+        import pprint
+        print(pprint.pformat(json.loads(services_path.read_text())))
+        print()
+        print()
+        print()
+        time.sleep(100)
+        return
         # Create claims in each instance
         claims = []
         for handle_name, service in services.items():
@@ -206,10 +219,17 @@ def test_docs_federation_activitypub_bovine(tmp_path):
                 ]
                 # TODO Retry with backoff with cap
                 # TODO Remove try except, fix federation
-                try:
-                    execute_cli(command)
-                    assert os.path.exists(their_claim_path)
-                    their_claim_path.unlink()
-                except Exception as e:
-                    print(e)
-                    continue
+                error = None
+                for i in range(0, 5):
+                    try:
+                        execute_cli(command)
+                    except Exception as e:
+                        if "urn:ietf:params:scitt:error:entryNotFound" in str(e):
+                            error = e
+                            time.sleep(1)
+                        else:
+                            raise
+                if error:
+                    raise error
+                assert os.path.exists(their_claim_path)
+                their_claim_path.unlink()

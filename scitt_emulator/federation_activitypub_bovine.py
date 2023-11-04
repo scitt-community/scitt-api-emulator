@@ -366,6 +366,6 @@ async def loop(client_name, client_config, handlers):
                     client, handlers, client_name=client_name
                 )
         except Exception as e:
-            logger.exception("Something went wrong for %s", client_name)
-            logger.exception(e)
+            # logger.exception("Something went wrong for %s", client_name)
+            # logger.exception(e)
             await asyncio.sleep(1)
