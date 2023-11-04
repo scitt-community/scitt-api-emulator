@@ -28,19 +28,25 @@ old_socket_getaddrinfo = socket.getaddrinfo
 old_create_sockets = hypercorn.config.Config.create_sockets
 
 
+def load_services_from_services_path(services):
+    if isinstance(services, (str, pathlib.Path)):
+        services_path = pathlib.Path(services)
+        if not services_path.exists():
+            return old_socket_getaddrinfo(host, *args, **kwargs)
+        services_content = services_path.read_text()
+        services_dict = json.loads(services_content)
+        services = {
+            handle_name: types.SimpleNamespace(**service_dict)
+            for handle_name, service_dict in services_dict.items()
+        }
+    return services
+
 def socket_getaddrinfo_map_service_ports(services, host, *args, **kwargs):
     # Map f"scitt.{handle_name}.example.com" to various local ports
     if "scitt." not in host:
         return old_socket_getaddrinfo(host, *args, **kwargs)
     _, handle_name, _, _ = host.split(".")
-    if isinstance(services, (str, pathlib.Path)):
-        services_path = pathlib.Path(services)
-        services_content = services_path.read_text()
-        services_dict = json.loads(services_content)
-        services = {
-            handle_name: types.SimpleNameSpace(**service_dict)
-            for handle_name, service_dict in service_dict.items()
-        }
+    services = load_services_from_services_path(services)
     return [
         (
             socket.AF_INET,
@@ -90,10 +96,23 @@ class Service:
     def server_process(app, addr_queue, services):
         try:
             class MockResolver(aiohttp.resolver.DefaultResolver):
-                async def resolve(self, *args, **kwargs):
+                async def resolve(self, host, *args, **kwargs):
                     nonlocal services
-                    print("MockResolver.getaddrinfo")
-                    return socket_getaddrinfo_map_service_ports(services, *args, **kwargs)
+                    if "scitt." not in host:
+                        return old_socket_getaddrinfo(host, *args, **kwargs)
+                    _, handle_name, _, _ = host.split(".")
+                    services = load_services_from_services_path(services)
+                    return [
+                        {
+                            "hostname": host,
+                            "host": "127.0.0.1",
+                            "port": services[handle_name].port,
+                            "family": socket.AF_INET,
+                            "proto": socket.SOCK_STREAM,
+                            "flags": socket.AI_ADDRCONFIG,
+                        }
+                    ]
+
             with contextlib.ExitStack() as exit_stack:
                 exit_stack.enter_context(
                     unittest.mock.patch(
