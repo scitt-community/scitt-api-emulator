@@ -31,6 +31,7 @@ from .test_cli import (
     content_type,
     payload,
     execute_cli,
+    socket_getaddrinfo_map_service_ports,
 )
 from .test_docs import (
     docutils_recursively_extract_nodes,
@@ -41,23 +42,6 @@ from .test_docs import (
 repo_root = pathlib.Path(__file__).parents[1]
 docs_dir = repo_root.joinpath("docs")
 allowlisted_issuer = "did:web:example.org"
-
-old_socket_getaddrinfo = socket.getaddrinfo
-
-def socket_getaddrinfo_map_service_ports(services, host, *args, **kwargs):
-    # Map f"scitt.{handle_name}.example.com" to various local ports
-    if "scitt." not in host:
-        return old_socket_getaddrinfo(host, *args, **kwargs)
-    _, handle_name, _, _ = host.split(".")
-    return [
-        (
-            socket.AF_INET,
-            socket.SOCK_STREAM,
-            6,
-            "",
-            ("127.0.0.1", services[handle_name].port),
-        )
-    ]
 
 
 def test_docs_federation_activitypub_bovine(tmp_path):
@@ -77,17 +61,18 @@ def test_docs_federation_activitypub_bovine(tmp_path):
         tmp_path.joinpath(name).write_text(content)
 
     services = {}
+    services_path = tmp_path / "services.json"
     for handle_name, following in {
         "bob": {
             "alice": {
                 "actor_id": "alice@scitt.alice.example.com",
             },
         },
-        "alice": {
-            "bob": {
-                "actor_id": "bob@scitt.bob.example.com",
-            },
-        },
+        # "alice": {
+        #     "bob": {
+        #         "actor_id": "bob@scitt.bob.example.com",
+        #     },
+        # },
     }.items():
         middleware_config_path = (
             tmp_path
@@ -114,7 +99,8 @@ def test_docs_federation_activitypub_bovine(tmp_path):
                 "workspace": tmp_path / handle_name / "workspace",
                 "error_rate": 0,
                 "use_lro": False,
-            }
+            },
+            services=services_path,
         )
 
     with contextlib.ExitStack() as exit_stack:
@@ -131,6 +117,15 @@ def test_docs_federation_activitypub_bovine(tmp_path):
         # Start all the services
         for handle_name, service in services.items():
             services[handle_name] = exit_stack.enter_context(service)
+            # Serialize services
+            services_path.write_text(
+                json.dumps(
+                    {
+                        handle_name: {"port": service.port}
+                        for handle_name, service in services.items()
+                    }
+                )
+            )
             # Test of resolution
             assert (
                 socket.getaddrinfo(f"scitt.{handle_name}.example.com", 0)[0][-1][-1]

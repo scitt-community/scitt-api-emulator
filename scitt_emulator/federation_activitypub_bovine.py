@@ -118,7 +118,7 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
 
         # Run client handlers
         async def mechanical_bull_loop(config):
-            from mechanical_bull.event_loop import loop
+            # from mechanical_bull.event_loop import loop
             from mechanical_bull.handlers import load_handlers, build_handler
 
             async with asyncio.TaskGroup() as taskgroup:
@@ -294,3 +294,78 @@ async def federate_created_entries(
         print(f"End of messages in outbox, total: {count_messages}")
     except:
         logger.error(traceback.format_exc())
+
+import asyncio
+
+import bovine
+import json
+
+import logging
+
+from mechanical_bull.handlers import HandlerEvent, call_handler_compat
+
+
+async def handle_connection(client: bovine.BovineClient, handlers: list):
+    print("handle_connection")
+    event_source = await client.event_source()
+    print(event_source )
+    logger.info("Connected")
+    for handler in handlers:
+        await call_handler_compat(
+            handler,
+            client,
+            None,
+            handler_event=HandlerEvent.OPENED,
+        )
+    async for event in event_source:
+        if not event:
+            return
+        if event and event.data:
+            data = json.loads(event.data)
+
+            for handler in handlers:
+                await call_handler_compat(
+                    handler,
+                    client,
+                    data,
+                    handler_event=HandlerEvent.DATA,
+                )
+    for handler in handlers:
+        await call_handler_compat(
+            handler,
+            client,
+            None,
+            handler_event=HandlerEvent.CLOSED,
+        )
+
+
+async def handle_connection_with_reconnect(
+    client: bovine.BovineClient,
+    handlers: list,
+    client_name: str = "BovineClient",
+    wait_time: int = 10,
+):
+    while True:
+        await handle_connection(client, handlers)
+        logger.info(
+            "Disconnected from server for %s, reconnecting in %d seconds",
+            client_name,
+            wait_time,
+        )
+        await asyncio.sleep(wait_time)
+
+
+async def loop(client_name, client_config, handlers):
+    while True:
+        try:
+            print(client_name)
+            pprint.pprint(client_config)
+            async with bovine.BovineClient(**client_config) as client:
+                print("client:", client)
+                await handle_connection_with_reconnect(
+                    client, handlers, client_name=client_name
+                )
+        except Exception as e:
+            logger.exception("Something went wrong for %s", client_name)
+            logger.exception(e)
+            await asyncio.sleep(60)

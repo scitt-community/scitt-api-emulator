@@ -3,9 +3,14 @@
 import os
 import io
 import json
+import types
 import socket
+import pathlib
+import aiohttp.resolver
+import functools
 import threading
 import traceback
+import contextlib
 import unittest.mock
 import multiprocessing
 import pytest
@@ -19,7 +24,32 @@ from scitt_emulator.oidc import OIDCAuthMiddleware
 content_type = "application/json"
 payload = '{"foo": "bar"}'
 
+old_socket_getaddrinfo = socket.getaddrinfo
 old_create_sockets = hypercorn.config.Config.create_sockets
+
+
+def socket_getaddrinfo_map_service_ports(services, host, *args, **kwargs):
+    # Map f"scitt.{handle_name}.example.com" to various local ports
+    if "scitt." not in host:
+        return old_socket_getaddrinfo(host, *args, **kwargs)
+    _, handle_name, _, _ = host.split(".")
+    if isinstance(services, (str, pathlib.Path)):
+        services_path = pathlib.Path(services)
+        services_content = services_path.read_text()
+        services_dict = json.loads(services_content)
+        services = {
+            handle_name: types.SimpleNameSpace(**service_dict)
+            for handle_name, service_dict in service_dict.items()
+        }
+    return [
+        (
+            socket.AF_INET,
+            socket.SOCK_STREAM,
+            6,
+            "",
+            ("127.0.0.1", services[handle_name].port),
+        )
+    ]
 
 
 def execute_cli(argv):
@@ -27,13 +57,14 @@ def execute_cli(argv):
 
 
 class Service:
-    def __init__(self, config, create_flask_app=None):
+    def __init__(self, config, create_flask_app=None, services=None):
         self.config = config
         self.create_flask_app = (
             create_flask_app
             if create_flask_app is not None
             else server.create_flask_app
         )
+        self.services = services
 
     def __enter__(self):
         app = self.create_flask_app(self.config)
@@ -42,7 +73,8 @@ class Service:
         self.host = "127.0.0.1"
         addr_queue = multiprocessing.Queue()
         self.process = multiprocessing.Process(name="server", target=self.server_process,
-                                              args=(app, addr_queue,))
+                                              args=(app, addr_queue,
+                                                    self.services))
         self.process.start()
         self.host = addr_queue.get(True)
         self.port = addr_queue.get(True)
@@ -55,20 +87,52 @@ class Service:
         self.process.join()
 
     @staticmethod
-    def server_process(app, addr_queue):
-        class MockConfig(hypercorn.config.Config):
-            def create_sockets(self, *args, **kwargs):
-                sockets = old_create_sockets(self, *args, **kwargs)
-                server_name, server_port = sockets.insecure_sockets[0].getsockname()
-                addr_queue.put(server_name)
-                addr_queue.put(server_port)
-                return sockets
-
+    def server_process(app, addr_queue, services):
         try:
-            with unittest.mock.patch(
-                "quart.app.HyperConfig",
-                side_effect=MockConfig,
-            ):
+            class MockResolver(aiohttp.resolver.DefaultResolver):
+                async def resolve(self, *args, **kwargs):
+                    nonlocal services
+                    print("MockResolver.getaddrinfo")
+                    return socket_getaddrinfo_map_service_ports(services, *args, **kwargs)
+            with contextlib.ExitStack() as exit_stack:
+                exit_stack.enter_context(
+                    unittest.mock.patch(
+                        "aiohttp.connector.DefaultResolver",
+                        side_effect=MockResolver,
+                    )
+                )
+                class MockConfig(hypercorn.config.Config):
+                    def create_sockets(self, *args, **kwargs):
+                        sockets = old_create_sockets(self, *args, **kwargs)
+                        server_name, server_port = sockets.insecure_sockets[0].getsockname()
+                        addr_queue.put(server_name)
+                        addr_queue.put(server_port)
+                        # Ensure that connect calls to them resolve as we want
+                        exit_stack.enter_context(
+                            unittest.mock.patch(
+                                "socket.getaddrinfo",
+                                wraps=functools.partial(
+                                    socket_getaddrinfo_map_service_ports,
+                                    services,
+                                )
+                            )
+                        )
+                        # exit_stack.enter_context(
+                        #     unittest.mock.patch(
+                        #         "asyncio.base_events.BaseEventLoop.getaddrinfo",
+                        #         wraps=make_loop_getaddrinfo_map_service_ports(
+                        #             services,
+                        #         )
+                        #     )
+                        # )
+                        return sockets
+
+                exit_stack.enter_context(
+                    unittest.mock.patch(
+                        "quart.app.HyperConfig",
+                        side_effect=MockConfig,
+                    )
+                )
                 app.run(port=0)
         except:
             traceback.print_exc()
