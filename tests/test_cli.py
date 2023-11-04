@@ -19,6 +19,8 @@ from scitt_emulator.oidc import OIDCAuthMiddleware
 content_type = "application/json"
 payload = '{"foo": "bar"}'
 
+old_create_sockets = hypercorn.config.Config.create_sockets
+
 
 def execute_cli(argv):
     return cli.main([str(v) for v in argv])
@@ -54,8 +56,6 @@ class Service:
 
     @staticmethod
     def server_process(app, addr_queue):
-        old_create_sockets = hypercorn.config.Config.create_sockets
-
         class MockConfig(hypercorn.config.Config):
             def create_sockets(self, *args, **kwargs):
                 sockets = old_create_sockets(self, *args, **kwargs)

@@ -11,6 +11,7 @@ import pathlib
 import tempfile
 import textwrap
 import threading
+import functools
 import itertools
 import subprocess
 import contextlib
@@ -40,22 +41,23 @@ from .test_docs import (
 repo_root = pathlib.Path(__file__).parents[1]
 docs_dir = repo_root.joinpath("docs")
 allowlisted_issuer = "did:web:example.org"
-non_allowlisted_issuer = "did:web:example.com"
-CLAIM_DENIED_ERROR = {"type": "denied", "detail": "content_address_of_reason"}
-CLAIM_DENIED_ERROR_BLOCKED = {
-    "type": "denied",
-    "detail": textwrap.dedent(
-        """
-        'did:web:example.com' is not one of ['did:web:example.org']
 
-        Failed validating 'enum' in schema['properties']['issuer']:
-            {'enum': ['did:web:example.org'], 'type': 'string'}
+old_socket_getaddrinfo = socket.getaddrinfo
 
-        On instance['issuer']:
-            'did:web:example.com'
-        """
-    ).lstrip(),
-}
+def socket_getaddrinfo_map_service_ports(services, host, *args, **kwargs):
+    # Map f"scitt.{handle_name}.example.com" to various local ports
+    if "scitt." not in host:
+        return old_socket_getaddrinfo(host, *args, **kwargs)
+    _, handle_name, _, _ = host.split(".")
+    return [
+        (
+            socket.AF_INET,
+            socket.SOCK_STREAM,
+            6,
+            "",
+            ("127.0.0.1", services[handle_name].port),
+        )
+    ]
 
 
 def test_docs_federation_activitypub_bovine(tmp_path):
@@ -115,30 +117,15 @@ def test_docs_federation_activitypub_bovine(tmp_path):
             }
         )
 
-    old_socket_getaddrinfo = socket.getaddrinfo
-
-    def socket_getaddrinfo_map_service_ports(host, *args, **kwargs):
-        # Map f"scitt.{handle_name}.example.com" to various local ports
-        nonlocal services
-        if "scitt." not in host:
-            return old_socket_getaddrinfo(host, *args, **kwargs)
-        _, handle_name, _, _ = host.split(".")
-        return [
-            (
-                socket.AF_INET,
-                socket.SOCK_STREAM,
-                6,
-                "",
-                ("127.0.0.1", services[handle_name].port),
-            )
-        ]
-
     with contextlib.ExitStack() as exit_stack:
         # Ensure that connect calls to them resolve as we want
         exit_stack.enter_context(
             unittest.mock.patch(
                 "socket.getaddrinfo",
-                wraps=socket_getaddrinfo_map_service_ports,
+                wraps=functools.partial(
+                    socket_getaddrinfo_map_service_ports,
+                    services,
+                )
             )
         )
         # Start all the services
