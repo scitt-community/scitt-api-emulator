@@ -66,7 +66,7 @@ def test_docs_federation_activitypub_bovine(tmp_path):
     services = {}
     services_path = tmp_path / "services.json"
 
-    MockClientRequest = make_MockClientRequest(services)
+    MockClientRequest = make_MockClientRequest(services_path)
 
     class TestSCITTFederationActivityPubBovine(SCITTFederationActivityPubBovine):
         async def make_client_session(self):

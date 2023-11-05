@@ -92,14 +92,21 @@ def make_MockClientRequest(services):
     class MockClientRequest(aiohttp.client_reqrep.ClientRequest):
         def __init__(self, method, url, *args, **kwargs):
             nonlocal services
-            if "scitt." in url:
-                uri = urllib.parse.urlparse(url)
-                host = uri.hostname
+            print(type(url), url)
+            if "scitt." in url.host:
+                # uri = urllib.parse.urlparse(url)
+                # host = uri.hostname
+                host = url.host
                 _, handle_name, _, _ = host.split(".")
                 services = load_services_from_services_path(services, host)
+                print(services)
                 if handle_name not in services:
                     raise socket.gaierror(f"{host} has not bound yet")
-                url = uri._replace(netloc=f"127.0.0.1:{services[handle_name].port}").geturl()
+                # url = uri._replace(netloc=f"127.0.0.1:{services[handle_name].port}").geturl()
+                url = url.with_host("127.0.0.1")
+                print(services[handle_name])
+                url = url.with_port(services[handle_name].port)
+                print(type(url), url)
                 kwargs.setdefault("headers", {})
                 kwargs["headers"]["Host"] = f"http://{host}"
                 print()
