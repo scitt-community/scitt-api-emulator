@@ -50,7 +50,9 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
         # tree_alg class's workspace
         self.workspace = Path(self.config["workspace"]).expanduser()
 
-        self.bovine_db_url = self.config.get("bovine_db_url", None)
+        self.bovine_db_url = self.config.get("bovine_db_url",
+                                             os.environ.get("BOVINE_DB_URL",
+                                                            None))
         if self.bovine_db_url and self.bovine_db_url.startswith("~"):
             self.bovine_db_url = str(Path(self.bovine_db_url).expanduser())
         # TODO Pass this as variable
@@ -59,7 +61,7 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
             logging.debug(f"Set BOVINE_DB_URL to {self.bovine_db_url}")
 
         BovinePubSub(app)
-        BovineHerd(app)
+        BovineHerd(app, db_url=self.bovine_db_url)
 
         app.before_serving(self.initialize_service)
         import subprocess
