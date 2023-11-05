@@ -16,6 +16,8 @@ import itertools
 import subprocess
 import contextlib
 import unittest.mock
+
+import aiohttp
 import pytest
 import myst_parser.parsers.docutils_
 import docutils.nodes
@@ -32,6 +34,7 @@ from .test_cli import (
     payload,
     execute_cli,
     socket_getaddrinfo_map_service_ports,
+    make_MockClientRequest,
 )
 from .test_docs import (
     docutils_recursively_extract_nodes,
@@ -62,6 +65,15 @@ def test_docs_federation_activitypub_bovine(tmp_path):
 
     services = {}
     services_path = tmp_path / "services.json"
+
+    MockClientRequest = make_MockClientRequest(services)
+
+    class TestSCITTFederationActivityPubBovine(SCITTFederationActivityPubBovine):
+        async def make_client_session(self):
+            nonlocal MockClientRequest
+            return aiohttp.ClientSession(trust_env=True,
+                                         request_class=MockClientRequest)
+
     for handle_name, following in {
         "bob": {
             # "alice": {
@@ -95,7 +107,7 @@ def test_docs_federation_activitypub_bovine(tmp_path):
         )
         services[handle_name] = Service(
             {
-                "middleware": [SCITTFederationActivityPubBovine],
+                "middleware": [TestSCITTFederationActivityPubBovine],
                 "middleware_config_path": [middleware_config_path],
                 "tree_alg": "CCF",
                 "workspace": tmp_path / handle_name / "workspace",
@@ -131,6 +143,18 @@ def test_docs_federation_activitypub_bovine(tmp_path):
                     handle_name: {"port": service.port}
                     for handle_name, service in services.items()
                 }
+            )
+        )
+        exit_stack.enter_context(
+            unittest.mock.patch(
+                "aiohttp.client_reqrep.ClientRequest",
+                side_effect=make_MockClientRequest(services),
+            )
+        )
+        exit_stack.enter_context(
+            unittest.mock.patch(
+                "aiohttp.client.ClientRequest",
+                side_effect=make_MockClientRequest(services),
             )
         )
 
@@ -185,7 +209,7 @@ def test_docs_federation_activitypub_bovine(tmp_path):
                 }
             )
 
-        time.sleep(100)
+        # time.sleep(100)
 
         # Test that we can download claims from all instances federated with
         for handle_name, service in services.items():

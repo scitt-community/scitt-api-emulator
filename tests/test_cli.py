@@ -88,6 +88,31 @@ def http_webfinger_response_json(*args, **kwargs):
     webfinger_response_json["links"][0]["href"] = webfinger_response_json["links"][0]["href"].replace("https://", "http://")
 
 
+def make_MockClientRequest(services):
+    class MockClientRequest(aiohttp.client_reqrep.ClientRequest):
+        def __init__(self, method, url, *args, **kwargs):
+            nonlocal services
+            if "scitt." in url:
+                uri = urllib.parse.urlparse(url)
+                host = uri.hostname
+                _, handle_name, _, _ = host.split(".")
+                services = load_services_from_services_path(services, host)
+                if handle_name not in services:
+                    raise socket.gaierror(f"{host} has not bound yet")
+                url = uri._replace(netloc=f"127.0.0.1:{services[handle_name].port}").geturl()
+                kwargs.setdefault("headers", {})
+                kwargs["headers"]["Host"] = f"http://{host}"
+                print()
+                print()
+                print()
+                print("modified_url:", url, kwargs["headers"])
+                print()
+                print()
+                print()
+                print()
+            super().__init__(method, url, *args, **kwargs)
+    return MockClientRequest
+
 def execute_cli(argv):
     return cli.main([str(v) for v in argv])
 
@@ -159,6 +184,18 @@ class Service:
                     unittest.mock.patch(
                         "aiohttp.connector.DefaultResolver",
                         side_effect=MockResolver,
+                    )
+                )
+                exit_stack.enter_context(
+                    unittest.mock.patch(
+                        "aiohttp.client_reqrep.ClientRequest",
+                        side_effect=make_MockClientRequest(services),
+                    )
+                )
+                exit_stack.enter_context(
+                    unittest.mock.patch(
+                        "aiohttp.client.ClientRequest",
+                        side_effect=make_MockClientRequest(services),
                     )
                 )
                 class MockConfig(hypercorn.config.Config):
