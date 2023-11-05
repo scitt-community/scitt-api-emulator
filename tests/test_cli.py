@@ -71,19 +71,19 @@ def socket_getaddrinfo_map_service_ports(services, host, *args, **kwargs):
 
 
 def http_webfinger_response_json(*args, **kwargs):
-    print()
-    print()
-    print()
-    print()
-    print()
-    print(http_webfinger_response_json)
-    print()
-    print()
-    print()
-    print()
-    print()
     webfinger_response_json = old_webfinger_response_json(*args, **kwargs)
     webfinger_response_json["links"][0]["href"] = webfinger_response_json["links"][0]["href"].replace("https://", "http://")
+    print()
+    print()
+    print()
+    print()
+    print()
+    print(webfinger_response_json)
+    print()
+    print()
+    print()
+    print()
+    print()
     return webfinger_response_json
 
 
@@ -144,7 +144,7 @@ class Service:
                         raise error
                     return [
                         {
-                            "hostname": host,
+                            "hostname": None,
                             "host": "127.0.0.1",
                             "port": services[handle_name].port,
                             "family": socket.AF_INET,
@@ -187,6 +187,12 @@ class Service:
                 exit_stack.enter_context(
                     unittest.mock.patch(
                         "bovine.utils.webfinger_response_json",
+                        wraps=http_webfinger_response_json,
+                    )
+                )
+                exit_stack.enter_context(
+                    unittest.mock.patch(
+                        "bovine_herd.server.wellknown.webfinger_response_json",
                         wraps=http_webfinger_response_json,
                     )
                 )

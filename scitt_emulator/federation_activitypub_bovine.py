@@ -62,6 +62,10 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
         BovineHerd(app)
 
         app.before_serving(self.initialize_service)
+        import subprocess
+        subprocess.check_call([
+            "ss", "-tpln",
+        ])
 
     async def initialize_service(self):
         # TODO Better domain / fqdn building
@@ -121,12 +125,25 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
             # from mechanical_bull.event_loop import loop
             from mechanical_bull.handlers import load_handlers, build_handler
 
-            async with asyncio.TaskGroup() as taskgroup:
-                for client_name, value in config.items():
-                    if isinstance(value, dict):
-                        handlers = load_handlers(value["handlers"])
-                        taskgroup.create_task(loop(client_name, value, handlers))
+            for client_name, value in config.items():
+                if isinstance(value, dict):
+                    handlers = load_handlers(value["handlers"])
+                    # taskgroup.create_task(loop(client_name, value, handlers))
+                    # await asyncio.sleep(10)
+                    print(client_name)
+                    client_config = value
+                    pprint.pprint(client_config)
+                    # TODO DEBUG TESTING XXX NOTE REMOVE
+                    os.environ["BUTCHER_ALLOW_HTTP"] = "1"
+                    client_config["domain"] = "http://" + client_config["host"]
+                    async with bovine.BovineClient(**client_config) as client:
+                        print("client:", client)
+                        # await handle_connection_with_reconnect(
+                        #     client, handlers, client_name=client_name,
+                        # )
+                        self.app.add_background_task(handle_connection_with_reconnect, client, handlers, client_name=client_name)
 
+        # await mechanical_bull_loop(config_toml_obj)
         self.app.add_background_task(mechanical_bull_loop, config_toml_obj)
 
 

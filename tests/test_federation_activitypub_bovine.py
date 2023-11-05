@@ -64,17 +64,17 @@ def test_docs_federation_activitypub_bovine(tmp_path):
     services_path = tmp_path / "services.json"
     for handle_name, following in {
         "bob": {
-            "alice": {
-                "actor_id": "alice@scitt.alice.example.com",
-                "domain": "http://scitt.alice.example.com",
-            },
+            # "alice": {
+            #     "actor_id": "alice@scitt.alice.example.com",
+            #     "domain": "http://scitt.alice.example.com",
+            # },
         },
-        "alice": {
-            "bob": {
-                "actor_id": "bob@scitt.bob.example.com",
-                "domain": "http://scitt.bob.example.com",
-            },
-        },
+        # "alice": {
+        #     "bob": {
+        #         "actor_id": "bob@scitt.bob.example.com",
+        #         "domain": "http://scitt.bob.example.com",
+        #     },
+        # },
     }.items():
         middleware_config_path = (
             tmp_path
@@ -184,6 +184,8 @@ def test_docs_federation_activitypub_bovine(tmp_path):
                     "service.handle_name": handle_name,
                 }
             )
+
+        time.sleep(100)
 
         # Test that we can download claims from all instances federated with
         for handle_name, service in services.items():
