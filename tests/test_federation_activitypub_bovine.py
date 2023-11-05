@@ -86,7 +86,7 @@ def test_docs_federation_activitypub_bovine(tmp_path):
             json.dumps(
                 {
                     "handle_name": handle_name,
-                    "fqdn": f"scitt.{handle_name}.example.com",
+                    "fqdn": f"http://scitt.{handle_name}.example.com",
                     "workspace": str(tmp_path / handle_name),
                     "bovine_db_url": str(tmp_path / handle_name / "bovine.sqlite3"),
                     "following": following,

@@ -71,6 +71,8 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
         # TODO Better domain / fqdn building
         if self.fqdn:
             self.domain = self.fqdn
+            # TODO netloc remove scheme (http, https) before set to domain
+            # Use schem to build endpoint_path
         else:
             self.domain = f'http://localhost:{self.app.config["port"]}'
 
@@ -111,7 +113,9 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
         else:
             logger.info("Actor not found, creating in database...")
             bovine_store = BovineAdminStore(domain=self.domain)
-            bovine_name = await bovine_store.register(self.handle_name)
+            bovine_name = await bovine_store.register(
+                self.handle_name,
+            )
             logger.info("Created actor with database name %s", bovine_name)
             await bovine_store.add_identity_string_to_actor(
                 bovine_name,
@@ -135,7 +139,7 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
                     pprint.pprint(client_config)
                     # TODO DEBUG TESTING XXX NOTE REMOVE
                     os.environ["BUTCHER_ALLOW_HTTP"] = "1"
-                    client_config["domain"] = "http://" + client_config["host"]
+                    client_config["domain"] = client_config["host"]
                     async with bovine.BovineClient(**client_config) as client:
                         print("client:", client)
                         # await handle_connection_with_reconnect(

@@ -70,9 +70,9 @@ def socket_getaddrinfo_map_service_ports(services, host, *args, **kwargs):
     ]
 
 
+# TODO Remvoe, no need to mock if we set set scheme in domain on store.register
 def http_webfinger_response_json(*args, **kwargs):
     webfinger_response_json = old_webfinger_response_json(*args, **kwargs)
-    webfinger_response_json["links"][0]["href"] = webfinger_response_json["links"][0]["href"].replace("https://", "http://")
     print()
     print()
     print()
@@ -85,6 +85,7 @@ def http_webfinger_response_json(*args, **kwargs):
     print()
     print()
     return webfinger_response_json
+    webfinger_response_json["links"][0]["href"] = webfinger_response_json["links"][0]["href"].replace("https://", "http://")
 
 
 def execute_cli(argv):
