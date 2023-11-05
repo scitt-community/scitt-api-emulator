@@ -356,16 +356,23 @@ async def handle_connection_with_reconnect(
 
 
 async def loop(client_name, client_config, handlers):
+    await asyncio.sleep(10)
+    print(client_name)
+    pprint.pprint(client_config)
+    # TODO DEBUG TESTING XXX NOTE REMOVE
+    os.environ["BUTCHER_ALLOW_HTTP"] = "1"
+    client_config["domain"] = "http://" + client_config["host"]
+    i = 1
     while True:
         try:
-            print(client_name)
-            pprint.pprint(client_config)
             async with bovine.BovineClient(**client_config) as client:
                 print("client:", client)
                 await handle_connection_with_reconnect(
                     client, handlers, client_name=client_name
                 )
         except Exception as e:
-            # logger.exception("Something went wrong for %s", client_name)
-            # logger.exception(e)
-            await asyncio.sleep(1)
+            logger.exception("Something went wrong for %s", client_name)
+            logger.exception(e)
+            await asyncio.sleep(10)
+            await asyncio.sleep(2 ** i)
+            i += 1

@@ -17,16 +17,24 @@ import multiprocessing
 import pytest
 import jwt
 import jwcrypto
-from flask import Flask, jsonify, send_file
+
+from quart import Quart, jsonify, send_file
 import hypercorn.config
+
+import bovine.utils
 from scitt_emulator import cli, server
 from scitt_emulator.oidc import OIDCAuthMiddleware
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 content_type = "application/json"
 payload = '{"foo": "bar"}'
 
 old_socket_getaddrinfo = socket.getaddrinfo
 old_create_sockets = hypercorn.config.Config.create_sockets
+old_webfinger_response_json = bovine.utils.webfinger_response_json
 
 
 def load_services_from_services_path(services, host):
@@ -42,10 +50,10 @@ def load_services_from_services_path(services, host):
         }
     return services
 
+
 def socket_getaddrinfo_map_service_ports(services, host, *args, **kwargs):
     # Map f"scitt.{handle_name}.example.com" to various local ports
     if "scitt." not in host:
-        print('"scitt." not in host', host, args, kwargs)
         return old_socket_getaddrinfo(host, *args, **kwargs)
     _, handle_name, _, _ = host.split(".")
     services = load_services_from_services_path(services, host)
@@ -60,6 +68,23 @@ def socket_getaddrinfo_map_service_ports(services, host, *args, **kwargs):
             ("127.0.0.1", services[handle_name].port),
         )
     ]
+
+
+def http_webfinger_response_json(*args, **kwargs):
+    print()
+    print()
+    print()
+    print()
+    print()
+    print(http_webfinger_response_json)
+    print()
+    print()
+    print()
+    print()
+    print()
+    webfinger_response_json = old_webfinger_response_json(*args, **kwargs)
+    webfinger_response_json["links"][0]["href"] = webfinger_response_json["links"][0]["href"].replace("https://", "http://")
+    return webfinger_response_json
 
 
 def execute_cli(argv):
@@ -98,6 +123,7 @@ class Service:
 
     @staticmethod
     def server_process(app, addr_queue, services):
+        # os.environ["BUTCHER_ALLOW_HTTP"] = "1"
         try:
             class MockResolver(aiohttp.resolver.DefaultResolver):
                 async def resolve(self, host, *args, **kwargs):
@@ -158,9 +184,16 @@ class Service:
                         side_effect=MockConfig,
                     )
                 )
+                exit_stack.enter_context(
+                    unittest.mock.patch(
+                        "bovine.utils.webfinger_response_json",
+                        wraps=http_webfinger_response_json,
+                    )
+                )
                 app.run(port=0)
         except:
-            traceback.print_exc()
+            # traceback.print_exc()
+            pass
 
 @pytest.mark.parametrize(
     "use_lro", [True, False],
@@ -273,7 +306,7 @@ def test_client_cli(use_lro: bool, tmp_path):
 
 
 def create_flask_app_oidc_server(config):
-    app = Flask("oidc_server")
+    app = Quart("oidc_server")
 
     app.config.update(dict(DEBUG=True))
     app.config.update(config)
