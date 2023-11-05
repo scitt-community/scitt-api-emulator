@@ -64,10 +64,6 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
         BovineHerd(app, db_url=self.bovine_db_url)
 
         app.while_serving(self.initialize_service)
-        import subprocess
-        subprocess.check_call([
-            "ss", "-tpln",
-        ])
 
     async def make_client_session(self):
         return aiohttp.ClientSession(trust_env=True)
@@ -132,47 +128,53 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
 
         # Run client handlers
         async def mechanical_bull_loop(config):
-            # from mechanical_bull.event_loop import loop
-            from mechanical_bull.handlers import load_handlers, build_handler
+            try:
+                # from mechanical_bull.event_loop import loop
+                from mechanical_bull.handlers import load_handlers, build_handler
 
-            for client_name, value in config.items():
-                if isinstance(value, dict):
-                    handlers = load_handlers(value["handlers"])
-                    # taskgroup.create_task(loop(client_name, value, handlers))
-                    # await asyncio.sleep(10)
-                    client_config = value
-                    # TODO DEBUG TESTING XXX NOTE REMOVE
-                    os.environ["BUTCHER_ALLOW_HTTP"] = "1"
-                    client_config["domain"] = client_config["host"]
-                    print()
-                    print()
-                    print()
-                    i = 1
-                    while True:
-                        try:
-                            pprint.pprint(client_config)
-                            # client = await self.app.config["bovine_async_exit_stack"].enter_async_context(bovine.BovineClient(**client_config))
-                            client = bovine.BovineClient(**client_config)
-                            print("client:", client)
-                            session = await self.make_client_session()
-                            # client = await self.app.config["bovine_async_exit_stack"].enter_async_context(client)
-                            print("session._request_class:", session._request_class)
-                            await client.init(session=session)
-                            print()
-                            print()
-                            print()
-                            # await handle_connection_with_reconnect(
-                            #     client, handlers, client_name=client_name,
-                            # )
-                        except aiohttp.client_exceptions.ClientConnectorError as e:
-                            logger.info("Something went wrong connection: %s: attempt %i: %s", client_name, i, e)
-                            # logger.exception(e)
-                            await asyncio.sleep(1)
-                            # await asyncio.sleep(2 ** i)
-                            i += 1
-                            continue
-                        # self.app.add_background_task(handle_connection_with_reconnect, client, handlers, client_name=client_name)
-                        break
+                for client_name, value in config.items():
+                    if isinstance(value, dict):
+                        handlers = load_handlers(value["handlers"])
+                        # taskgroup.create_task(loop(client_name, value, handlers))
+                        # await asyncio.sleep(10)
+                        client_config = value
+                        # TODO DEBUG TESTING XXX NOTE REMOVE
+                        os.environ["BUTCHER_ALLOW_HTTP"] = "1"
+                        client_config["domain"] = client_config["host"]
+                        # self.app.add_background_task(loop, client_name,
+                        #                                   client_config,
+                        #                                   handlers)
+                        await loop(client_name,
+                                                          client_config,
+                                                          handlers)
+                        continue
+                        i = 1
+                        while True:
+                            try:
+                                pprint.pprint(client_config)
+                                # client = await self.app.config["bovine_async_exit_stack"].enter_async_context(bovine.BovineClient(**client_config))
+                                client = bovine.BovineClient(**client_config)
+                                print("client:", client)
+                                session = await self.make_client_session()
+                                # client = await self.app.config["bovine_async_exit_stack"].enter_async_context(client)
+                                print("session:", session)
+                                print("session._request_class:", session._request_class)
+                                print("Client init success!!!")
+                                # await handle_connection_with_reconnect(
+                                #     client, handlers, client_name=client_name,
+                                # )
+                            except aiohttp.client_exceptions.ClientConnectorError as e:
+                                logger.info("Something went wrong connection: %s: attempt %i: %s", client_name, i, e)
+                            except Exception as e:
+                                logger.exception(e)
+                                await asyncio.sleep(1)
+                                # await asyncio.sleep(2 ** i)
+                                i += 1
+                                continue
+                            self.app.add_background_task(handle_connection_with_reconnect, client, handlers, client_name=client_name)
+                            break
+            except Exception as e:
+                logger.exception(e)
 
 
         # async with aiohttp.ClientSession(trust_env=True) as client_session:
@@ -410,12 +412,9 @@ async def handle_connection_with_reconnect(
 
 
 async def loop(client_name, client_config, handlers):
-    await asyncio.sleep(10)
-    print(client_name)
-    pprint.pprint(client_config)
     # TODO DEBUG TESTING XXX NOTE REMOVE
     os.environ["BUTCHER_ALLOW_HTTP"] = "1"
-    client_config["domain"] = "http://" + client_config["host"]
+    # client_config["domain"] = "http://" + client_config["host"]
     i = 1
     while True:
         try:
@@ -427,6 +426,7 @@ async def loop(client_name, client_config, handlers):
         except Exception as e:
             logger.exception("Something went wrong for %s", client_name)
             logger.exception(e)
-            await asyncio.sleep(10)
-            await asyncio.sleep(2 ** i)
+            await asyncio.sleep(1)
+            # await asyncio.sleep(10)
+            # await asyncio.sleep(2 ** i)
             i += 1

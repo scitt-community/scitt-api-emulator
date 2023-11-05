@@ -65,6 +65,10 @@ def create_flask_app(config):
     def is_unavailable():
         return random.random() <= error_rate
 
+    @app.route("/test", methods=["GET"])
+    async def get_test():
+        return await make_response({"OK": True}, 200, {})
+
     @app.route("/entries/<string:entry_id>/receipt", methods=["GET"])
     async def get_receipt(entry_id: str):
         if is_unavailable():

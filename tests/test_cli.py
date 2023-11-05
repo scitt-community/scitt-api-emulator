@@ -48,6 +48,7 @@ def load_services_from_services_path(services, host):
             handle_name: types.SimpleNamespace(**service_dict)
             for handle_name, service_dict in services_dict.items()
         }
+        print("services:", services)
     return services
 
 
@@ -73,51 +74,28 @@ def socket_getaddrinfo_map_service_ports(services, host, *args, **kwargs):
 # TODO Remvoe, no need to mock if we set set scheme in domain on store.register
 def http_webfinger_response_json(*args, **kwargs):
     webfinger_response_json = old_webfinger_response_json(*args, **kwargs)
-    print()
-    print()
-    print()
-    print()
-    print()
-    print(webfinger_response_json)
-    print()
-    print()
-    print()
-    print()
-    print()
     return webfinger_response_json
-    webfinger_response_json["links"][0]["href"] = webfinger_response_json["links"][0]["href"].replace("https://", "http://")
+    # webfinger_response_json["links"][0]["href"] = webfinger_response_json["links"][0]["href"].replace("https://", "http://")
 
 
 def make_MockClientRequest(services):
     class MockClientRequest(aiohttp.client_reqrep.ClientRequest):
         def __init__(self, method, url, *args, **kwargs):
             nonlocal services
-            print(type(url), url)
             if "scitt." in url.host:
                 # uri = urllib.parse.urlparse(url)
                 # host = uri.hostname
                 host = url.host
                 _, handle_name, _, _ = host.split(".")
                 services = load_services_from_services_path(services, host)
-                print(services)
                 if handle_name not in services:
                     raise socket.gaierror(f"{host} has not bound yet")
-                # url = uri._replace(netloc=f"127.0.0.1:{services[handle_name].port}").geturl()
                 url = url.with_host("127.0.0.1")
-                print(services[handle_name])
                 url = url.with_port(services[handle_name].port)
-                print(type(url), url)
                 kwargs.setdefault("headers", {})
                 kwargs["headers"]["Host"] = f"http://{host}"
-                print()
-                print()
-                print()
-                print("modified_url:", url, kwargs["headers"])
-                print()
-                print()
-                print()
-                print()
             super().__init__(method, url, *args, **kwargs)
+            print("Is SSL?", self.is_ssl())
     return MockClientRequest
 
 def execute_cli(argv):
@@ -187,12 +165,6 @@ class Service:
                     ]
 
             with contextlib.ExitStack() as exit_stack:
-                exit_stack.enter_context(
-                    unittest.mock.patch(
-                        "aiohttp.connector.DefaultResolver",
-                        side_effect=MockResolver,
-                    )
-                )
                 exit_stack.enter_context(
                     unittest.mock.patch(
                         "aiohttp.client_reqrep.ClientRequest",

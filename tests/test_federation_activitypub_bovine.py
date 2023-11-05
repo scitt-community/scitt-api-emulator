@@ -76,17 +76,17 @@ def test_docs_federation_activitypub_bovine(tmp_path):
 
     for handle_name, following in {
         "bob": {
-            # "alice": {
-            #     "actor_id": "alice@scitt.alice.example.com",
-            #     "domain": "http://scitt.alice.example.com",
-            # },
+            "alice": {
+                "actor_id": "alice@scitt.alice.example.com",
+                "domain": "http://scitt.alice.example.com",
+            },
         },
-        # "alice": {
-        #     "bob": {
-        #         "actor_id": "bob@scitt.bob.example.com",
-        #         "domain": "http://scitt.bob.example.com",
-        #     },
-        # },
+        "alice": {
+            "bob": {
+                "actor_id": "bob@scitt.bob.example.com",
+                "domain": "http://scitt.bob.example.com",
+            },
+        },
     }.items():
         middleware_config_path = (
             tmp_path
