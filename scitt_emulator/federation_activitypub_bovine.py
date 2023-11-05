@@ -124,7 +124,8 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
                 "key0",
                 did_key,
             )
-            logger.info("Actor key added in database")
+            _account, actor_url = await self.app.config["bovine_store"].get_account_url_for_identity(did_key)
+            logger.info("Actor key added in database. actor_url is %s", actor_url)
 
         # Run client handlers
         async def mechanical_bull_loop(config):
