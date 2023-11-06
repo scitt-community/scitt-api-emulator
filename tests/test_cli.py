@@ -7,7 +7,7 @@ import types
 import socket
 import pathlib
 import asyncio
-import aiohttp.resolver
+import aiohttp
 import functools
 import threading
 import traceback
@@ -79,7 +79,7 @@ def http_webfinger_response_json(*args, **kwargs):
 
 
 def make_MockClientRequest(services):
-    class MockClientRequest(aiohttp.client_reqrep.ClientRequest):
+    class MockClientRequest(aiohttp.ClientRequest):
         def __init__(self, method, url, *args, **kwargs):
             nonlocal services
             if "scitt." in url.host:
@@ -136,45 +136,12 @@ class Service:
     def server_process(app, addr_queue, services):
         # os.environ["BUTCHER_ALLOW_HTTP"] = "1"
         try:
-            class MockResolver(aiohttp.resolver.DefaultResolver):
-                async def resolve(self, host, *args, **kwargs):
-                    nonlocal services
-                    if "scitt." not in host:
-                        return old_socket_getaddrinfo(host, *args, **kwargs)
-                    _, handle_name, _, _ = host.split(".")
-                    error = None
-                    for i in range(0, 5):
-                        try:
-                            services = load_services_from_services_path(services, host)
-                            if handle_name not in services:
-                                raise socket.gaierror(f"{host} has not bound yet")
-                        except socket.gaierror as e:
-                            error = e
-                            await asyncio.sleep(1)
-                    if error:
-                        raise error
-                    return [
-                        {
-                            "hostname": None,
-                            "host": "127.0.0.1",
-                            "port": services[handle_name].port,
-                            "family": socket.AF_INET,
-                            "proto": socket.IPPROTO_TCP,
-                            "flags": socket.AI_ADDRCONFIG,
-                        }
-                    ]
-
             with contextlib.ExitStack() as exit_stack:
+                MockClientRequest = make_MockClientRequest(services)
                 exit_stack.enter_context(
                     unittest.mock.patch(
-                        "aiohttp.client_reqrep.ClientRequest",
-                        side_effect=make_MockClientRequest(services),
-                    )
-                )
-                exit_stack.enter_context(
-                    unittest.mock.patch(
-                        "aiohttp.client.ClientRequest",
-                        side_effect=make_MockClientRequest(services),
+                        "aiohttp.ClientRequest",
+                        side_effect=MockClientRequest,
                     )
                 )
                 class MockConfig(hypercorn.config.Config):

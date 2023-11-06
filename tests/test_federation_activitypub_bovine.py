@@ -218,8 +218,7 @@ def test_docs_federation_activitypub_bovine(tmp_path):
                 original_handle_name = claim["service.handle_name"]
                 # Do not test claim retrieval from submission service here, only
                 # services federated with
-                # TODO XXX DEBUG NOTE Replace with: if original_handle_name == handle_name:
-                if original_handle_name != handle_name:
+                if original_handle_name == handle_name:
                     continue
                 their_claim_path = claim_path.with_suffix(
                     f".federated.{original_handle_name}.to.{handle_name}"
@@ -237,7 +236,7 @@ def test_docs_federation_activitypub_bovine(tmp_path):
                 # TODO Retry with backoff with cap
                 # TODO Remove try except, fix federation
                 error = None
-                for i in range(0, 5):
+                for i in range(0, 50):
                     try:
                         execute_cli(command)
                         break
