@@ -179,11 +179,10 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
 
         # async with aiohttp.ClientSession(trust_env=True) as client_session:
         async with contextlib.AsyncExitStack() as async_exit_stack:
+            # await mechanical_bull_loop(config_toml_obj)
+            self.app.add_background_task(mechanical_bull_loop, config_toml_obj)
             self.app.config["bovine_async_exit_stack"] = async_exit_stack
             yield
-
-        # await mechanical_bull_loop(config_toml_obj)
-        self.app.add_background_task(mechanical_bull_loop, config_toml_obj)
 
 
 async def handle(
