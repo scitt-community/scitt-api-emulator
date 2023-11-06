@@ -10,6 +10,7 @@ import httpx
 
 from scitt_emulator import create_statement
 from scitt_emulator.tree_algs import TREE_ALGS
+from scitt_emulator.signals import SCITTSignals
 
 DEFAULT_URL = "http://127.0.0.1:8000"
 CONNECT_RETRIES = 3
@@ -157,7 +158,7 @@ def verify_receipt(cose_path: Path, receipt_path: Path, service_parameters_path:
         service_parameters = json.load(f)
 
     clazz = TREE_ALGS[service_parameters["treeAlgorithm"]]
-    service = clazz(service_parameters_path=service_parameters_path)
+    service = clazz(signals=SCITTSignals(), service_parameters_path=service_parameters_path)
     service.verify_receipt(cose_path, receipt_path)
     print("Receipt verified")
 

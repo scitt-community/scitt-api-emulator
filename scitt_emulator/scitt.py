@@ -73,7 +73,7 @@ class SCITTServiceEmulator(ABC):
         )
 
     async def signal_receiver_submit_claim(self, _sender, claim: bytes) -> None:
-        await self.submit_claim(claim, long_running=True)
+        await self.submit_claim(claim, long_running=False)
 
     @abstractmethod
     def initialize_service(self):
@@ -162,14 +162,16 @@ class SCITTServiceEmulator(ABC):
     
         entry = {"entryId": entry_id}
 
-        await self.signals.federation.created_entry.send_async(
-            self,
-            created_entry=SCITTSignalsFederationCreatedEntry(
-                tree_alg=self.tree_alg,
-                entry_id=entry_id,
-                receipt=receipt,
-                claim=claim,
-                public_service_parameters=self.public_service_parameters(),
+        asyncio.create_task(
+            self.signals.federation.created_entry.send_async(
+                self,
+                created_entry=SCITTSignalsFederationCreatedEntry(
+                    tree_alg=self.tree_alg,
+                    entry_id=entry_id,
+                    receipt=receipt,
+                    claim=claim,
+                    public_service_parameters=self.public_service_parameters(),
+                )
             )
         )
 

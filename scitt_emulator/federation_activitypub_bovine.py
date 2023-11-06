@@ -141,12 +141,12 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
                         # TODO DEBUG TESTING XXX NOTE REMOVE
                         os.environ["BUTCHER_ALLOW_HTTP"] = "1"
                         client_config["domain"] = client_config["host"]
-                        # self.app.add_background_task(loop, client_name,
-                        #                                   client_config,
-                        #                                   handlers)
-                        await loop(client_name,
+                        self.app.add_background_task(loop, client_name,
                                                           client_config,
                                                           handlers)
+                        # await loop(client_name,
+                        #                                   client_config,
+                        #                                   handlers)
                         continue
                         i = 1
                         while True:
@@ -207,7 +207,8 @@ async def handle(
                     created_entry: SCITTSignalsFederationCreatedEntry = None,
                 ):
                     nonlocal client
-                    await federate_created_entries(client, sender, created_entry)
+                    asyncio.create_task(federate_created_entries(client, sender,
+                                                                 created_entry))
 
                 client.federate_created_entries = types.MethodType(
                     signals.federation.created_entry.connect(

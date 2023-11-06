@@ -127,7 +127,7 @@ Populate Bob's federation config
   "handle_name": "bob",
   "fqdn": "scitt.bob.chadig.com",
   "workspace": "~/Documents/fediverse/scitt_federation_bob/",
-  "bovine_db_url": "~/Documents/fediverse/scitt_federation_bob/bovine.sqlite3",
+  "bovine_db_url": "sqlite:///home/username/Documents/fediverse/scitt_federation_bob/bovine.sqlite3",
   "following": {
     "alice": {
       "actor_id": "alice@scitt.alice.chadig.com",
@@ -158,7 +158,7 @@ Populate Alice's federation config
   "handle_name": "alice",
   "fqdn": "scitt.alice.chadig.com",
   "workspace": "~/Documents/fediverse/scitt_federation_alice/",
-  "bovine_db_url": "~/Documents/fediverse/scitt_federation_alice/bovine.sqlite3",
+  "bovine_db_url": "sqlite:///home/username/Documents/fediverse/scitt_federation_alice/bovine.sqlite3",
   "following": {
     "bob": {
       "actor_id": "bob@scitt.bob.chadig.com"
