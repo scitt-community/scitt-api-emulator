@@ -3,10 +3,12 @@ import sys
 import json
 import enum
 import types
+import pprint
 import atexit
 import base64
 import socket
 import inspect
+import tomllib
 import logging
 import asyncio
 import pathlib
@@ -20,20 +22,16 @@ import urllib.parse
 from pathlib import Path
 from typing import Optional
 
-import tomli
 import tomli_w
 import bovine
 import aiohttp
 from bovine_store import BovineAdminStore
 from bovine_herd import BovineHerd
 from bovine_pubsub import BovinePubSub
-from bovine.activitystreams import factories_for_actor_object
 from bovine.clients import lookup_uri_with_webfinger
+from bovine.crypto import generate_ed25519_private_key, private_key_to_did_key
 from mechanical_bull.handlers import (
-    HandlerEvent,
-    HandlerAPIVersion,
     load_handlers,
-    build_handler,
 )
 
 from scitt_emulator.scitt import SCITTServiceEmulator
@@ -42,8 +40,6 @@ from scitt_emulator.tree_algs import TREE_ALGS
 from scitt_emulator.signals import SCITTSignals, SCITTSignalsFederationCreatedEntry
 
 logger = logging.getLogger(__name__)
-
-import pprint
 
 
 class SCITTFederationActivityPubBovine(SCITTFederation):
@@ -60,7 +56,7 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
             "bovine_db_url", os.environ.get("BOVINE_DB_URL", None)
         )
         if self.bovine_db_url and self.bovine_db_url.startswith("~"):
-            self.bovine_db_url = str(Path(self.bovine_db_url).expanduser())
+            self.bovine_db_url = "sqlite://" + str(Path(self.bovine_db_url).expanduser())
         # TODO Pass this as variable
         if not "BOVINE_DB_URL" in os.environ and self.bovine_db_url:
             os.environ["BOVINE_DB_URL"] = self.bovine_db_url
@@ -86,21 +82,21 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
         config_toml_path = pathlib.Path(self.workspace, "config.toml")
         if not config_toml_path.exists():
             logger.info("Actor client config does not exist, creating...")
-            cmd = [
-                sys.executable,
-                "-um",
-                "mechanical_bull.add_user",
-                "--accept",
-                self.handle_name,
-                self.domain,
-            ]
-            subprocess.check_call(
-                cmd,
-                cwd=self.workspace,
-            )
-            logger.info("Actor client config created")
+            config_toml_obj = {
+                self.handle_name: {
+                    "secret": generate_ed25519_private_key(),
+                    "host": self.domain,
+                    "domain": self.domain,
+                    "handlers": {
+                        "mechanical_bull.actions.accept_follow_request": True,
+                    },
+                },
+            }
+            config_toml_path.write_text(tomli_w.dumps(config_toml_obj))
+            logger.info("Actor client config.toml created")
+        else:
+            config_toml_obj = tomllib.loads(config_toml_path.read_text())
 
-        config_toml_obj = tomli.loads(config_toml_path.read_text())
         # Enable handler() function in this file for this actor
         config_toml_obj[self.handle_name]["handlers"][
             inspect.getmodule(sys.modules[__name__]).__spec__.name
@@ -108,10 +104,10 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
             "signals": self.signals,
             "following": self.config.get("following", {}),
         }
+
         # Extract public key from private key in config file
-        did_key = bovine.crypto.private_key_to_did_key(
-            config_toml_obj[self.handle_name]["secret"],
-        )
+        private_key = config_toml_obj[self.handle_name]["secret"]
+        did_key = bovine.crypto.private_key_to_did_key(private_key)
 
         bovine_store = self.app.config["bovine_store"]
         _account, actor_url = await bovine_store.get_account_url_for_identity(did_key)
@@ -134,24 +130,15 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
             ].get_account_url_for_identity(did_key)
             logger.info("Actor key added in database. actor_url is %s", actor_url)
 
-        # Run client handlers
-        async def mechanical_bull_loop(config):
-            try:
-                for client_name, client_config in config.items():
-                    if isinstance(client_config, dict):
-                        handlers = load_handlers(client_config["handlers"])
-                        client_config["domain"] = client_config["host"]
-                        self.app.add_background_task(
-                            loop, client_name, client_config, handlers
-                        )
-            except Exception as e:
-                logger.exception(e)
-
         # async with aiohttp.ClientSession(trust_env=True) as client_session:
         async with contextlib.AsyncExitStack() as async_exit_stack:
             # await mechanical_bull_loop(config_toml_obj)
             self.app.config["bovine_async_exit_stack"] = async_exit_stack
-            self.app.add_background_task(mechanical_bull_loop, config_toml_obj)
+            self.app.add_background_task(
+                mechanical_bull_loop,
+                config_toml_obj,
+                add_background_task=self.app.add_background_task,
+            )
             yield
 
 
@@ -473,3 +460,14 @@ async def loop(client_name, client_config, handlers):
             logger.exception(e)
             await asyncio.sleep(2**i)
             i += 1
+
+
+# Run client handlers using call_compat
+async def mechanical_bull_loop(config, *, add_background_task=asyncio.create_task):
+    try:
+        for client_name, client_config in config.items():
+            if isinstance(client_config, dict):
+                handlers = load_handlers(client_config["handlers"])
+                add_background_task(loop, client_name, client_config, handlers)
+    except Exception as e:
+        logger.exception(e)

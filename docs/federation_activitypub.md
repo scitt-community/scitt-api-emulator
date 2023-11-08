@@ -50,6 +50,9 @@ flowchart TD
 
 Install the SCITT API Emulator with the `federation-activitypub-bovine` extra.
 
+- https://bovine-herd.readthedocs.io/en/latest/deployment.html
+  - Bovine and associated libraries **require Python 3.11 or greater!!!**
+
 ```console
 $ pip install -e .[federation-activitypub-bovine]
 ```
@@ -94,28 +97,6 @@ By the end of this tutorial you will have four terminals open.
     ensure availability. Federation could assist with keeping mirrors as up to
     date as possible.
 
-### Bring up the ActivityPub Server
-
-First we install our dependencies
-
-- https://codeberg.org/bovine/bovine
-  - Most of the tools need to be run from the directory with the SQLite database in them (`bovine.sqlite3`)
-- https://bovine-herd.readthedocs.io/en/latest/deployment.html
-  - Bovine and associated libraries **require Python 3.11 or greater!!!**
-
-```console
-$ python --version
-Python 3.11.5
-$ python -m venv .venv && \
-    . .venv/bin/activate && \
-    pip install -U pip setuptools wheel && \
-    pip install \
-      tomli-w \
-      bovine{-store,-process,-pubsub,-herd,-tool} \
-      'https://codeberg.org/bovine/bovine/archive/main.tar.gz#egg=bovine&subdirectory=bovine' \
-      'https://codeberg.org/pdxjohnny/mechanical_bull/archive/event_loop_on_connect_call_handlers.tar.gz#egg=mechanical-bull'
-```
-
 ### Bring up Bob's SCITT Instance
 
 Populate Bob's federation config
@@ -127,10 +108,10 @@ Populate Bob's federation config
   "handle_name": "bob",
   "fqdn": "scitt.bob.chadig.com",
   "workspace": "~/Documents/fediverse/scitt_federation_bob/",
-  "bovine_db_url": "sqlite:///home/username/Documents/fediverse/scitt_federation_bob/bovine.sqlite3",
+  "bovine_db_url": "~/Documents/fediverse/scitt_federation_bob/bovine.sqlite3",
   "following": {
     "alice": {
-      "actor_id": "alice@scitt.alice.chadig.com",
+      "actor_id": "alice@scitt.alice.chadig.com"
     }
   }
 }
@@ -158,7 +139,7 @@ Populate Alice's federation config
   "handle_name": "alice",
   "fqdn": "scitt.alice.chadig.com",
   "workspace": "~/Documents/fediverse/scitt_federation_alice/",
-  "bovine_db_url": "sqlite:///home/username/Documents/fediverse/scitt_federation_alice/bovine.sqlite3",
+  "bovine_db_url": "~/Documents/fediverse/scitt_federation_alice/bovine.sqlite3",
   "following": {
     "bob": {
       "actor_id": "bob@scitt.bob.chadig.com"
