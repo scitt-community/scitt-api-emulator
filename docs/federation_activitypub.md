@@ -46,6 +46,8 @@ flowchart TD
     bob_receipt_created --> alice_inbox
 ```
 
+[![asciicast-federation-activitypub-bovine](https://asciinema.org/a/619517.svg)](https://asciinema.org/a/619517)
+
 ## Dependencies
 
 Install the SCITT API Emulator with the `federation-activitypub-bovine` extra.
