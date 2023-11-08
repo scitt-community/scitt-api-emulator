@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import enum
 import types
 import atexit
 import base64
@@ -152,6 +153,19 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
             self.app.config["bovine_async_exit_stack"] = async_exit_stack
             self.app.add_background_task(mechanical_bull_loop, config_toml_obj)
             yield
+
+
+# Begin ActivityPub Actor automation handler code
+class HandlerAPIVersion(enum.Enum):
+    # unstable API version used for development between versions
+    unstable = enum.auto()
+    v0_2_5 = enum.auto()
+
+
+class HandlerEvent(enum.Enum):
+    DATA = enum.auto()
+    OPENED = enum.auto()
+    CLOSED = enum.auto()
 
 
 async def handle(
@@ -322,14 +336,78 @@ async def federate_created_entries(
         logger.error(traceback.format_exc())
 
 
-import asyncio
+async def call_handler_compat(handler, *args, **kwargs):
+    """Helper function to call a handler across versions of the handler calling
+    convention.
+    """
+    # Inspect handler to determine accepted arguments and for logging purposes
+    handler_module = inspect.getmodule(handler)
+    handler_name = getattr(
+        handler, "__name__", getattr(handler, "__qualname__", repr(handler))
+    )
+    parameters = inspect.signature(handler).parameters
 
-import bovine
-import json
+    inspect_args = {
+        name: parameter
+        for name, parameter in parameters.items()
+        if parameter.default is inspect.Parameter.empty
+    }
+    inspect_kwargs = {
+        name: parameter
+        for name, parameter in parameters.items()
+        if parameter.default is not inspect.Parameter.empty
+    }
 
-import logging
+    # Determine version of handler API in use. Assume lowest version if not
+    handler_api_version = HandlerAPIVersion.unstable
+    handler_api_version_parameter = inspect_kwargs.get("handler_api_version", None)
+    if "handler_api_version" in kwargs:
+        handler_api_version = kwargs["handler_api_version"]
+    elif "handler_event" not in inspect_kwargs:
+        handler_api_version = HandlerAPIVersion.v0_2_5
+    elif (
+        handler_api_version_parameter.annotation is HandlerAPIVersion
+        and handler_api_version_parameter.default is not inspect.Parameter.empty
+    ):
+        handler_api_version = handler_api_version_parameter.default
 
-from mechanical_bull.handlers import HandlerEvent, call_handler_compat
+    # Pass version of handler API called with if not set explictly
+    if "handler_api_version" not in kwargs:
+        kwargs["handler_api_version"] = handler_api_version
+
+    # Handle adaptations across versions
+    if (
+        handler_api_version == HandlerAPIVersion.v0_2_5
+        and args[list(inspect_args.keys()).index("data")] is None
+    ):
+        return
+
+    # Remove unknown arguments which would break calls to older handlers
+    if len(args) != len(inspect_args):
+        logger.info(
+            "%s:%s does not support arguments: %s",
+            handler_module,
+            handler_name,
+            json.dumps(list(inspect_args.keys())[len(args) :]),
+        )
+
+    args = args[: len(inspect_args)]
+
+    remove_kwargs = [keyword for keyword in kwargs if keyword not in inspect_kwargs]
+
+    if remove_kwargs:
+        logger.info(
+            "%s:%s does not support keyword arguments: %s",
+            handler_module,
+            handler_name,
+            json.dumps(remove_kwargs),
+        )
+
+    for keyword in remove_kwargs:
+        del kwargs[keyword]
+
+    # Call handler and return result
+    return await handler(*args, **kwargs)
 
 
 async def handle_connection(client: bovine.BovineClient, handlers: list):
