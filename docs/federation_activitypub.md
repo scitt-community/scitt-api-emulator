@@ -14,26 +14,23 @@
     Determine the Most Critical OSS Components
 
 ```mermaid
-flowchart TD
-    subgraph alice
+flowchart LR
+    subgraph alice[Alice]
       subgraph aliceSCITT[SCITT]
-        alice_submit_claim[Submit Claim]
+        alice_submit_claim[Submit Statement]
         alice_receipt_created[Receipt Created]
 
         alice_submit_claim --> alice_receipt_created
       end
-      subgraph aliceActivityPubActor[ActivityPub Actor]
-        alice_inbox[Inbox]
-      end
-
-      alice_inbox --> alice_submit_claim
     end
-    subgraph bob
+    subgraph bob[Bob]
       subgraph bobSCITT[SCITT]
-        bob_submit_claim[Submit Claim]
+        bob_submit_claim[Submit Statement]
         bob_receipt_created[Receipt Created]
+        bob_make_statement_available_created[Serve Statement]
 
         bob_submit_claim --> bob_receipt_created
+        bob_submit_claim --> bob_make_statement_available_created
       end
       subgraph bobActivityPubActor[ActivityPub Actor]
         bob_inbox[Inbox]
@@ -41,9 +38,23 @@ flowchart TD
 
       bob_inbox --> bob_submit_claim
     end
+    subgraph eve[Eve]
+      subgraph eve_client[Submit to Alice, Retrieve from Bob and verify]
+        eve_submit_claim[Submit Statement]
+        eve_retrieve_statement[Retrieve Statement]
+        eve_retrieve_receipt[Retrieve Receipt]
+        eve_verify_receipt[Verify Receipt]
+      end
+    end
+
+    eve_submit_claim --> alice_submit_claim
+
+    eve_retrieve_statement --> eve_verify_receipt
+    eve_retrieve_receipt --> eve_verify_receipt
+    bob_make_statement_available_created --> eve_retrieve_statement
+    bob_receipt_created --> eve_retrieve_receipt
 
     alice_receipt_created --> bob_inbox
-    bob_receipt_created --> alice_inbox
 ```
 
 [![asciicast-federation-activitypub-bovine](https://asciinema.org/a/619517.svg)](https://asciinema.org/a/619517)
@@ -59,7 +70,7 @@ Install the SCITT API Emulator with the `federation-activitypub-bovine` extra.
 $ pip install -e .[federation-activitypub-bovine]
 ```
 
-## Example of Federating Claims / Receipts Across SCITT Instances
+## Example of Federating Statements / Receipts Across SCITT Instances
 
 > Please refer to the [Registration Policies](registration_policies.md) doc for
 > more information about claim insert policies.
@@ -161,22 +172,22 @@ $ scitt-emulator server \
     --middleware-config-path ${HOME}/Documents/fediverse/scitt_federation_alice/config.json
 ```
 
-### Create and Submit Claim to Bob's Instance
+### Create and Submit Statement to Alice's Instance
 
 ```console
 $ scitt-emulator client create-claim --issuer did:web:example.org --content-type application/json --payload '{"sun": "yellow"}' --out claim.cose
 Claim written to claim.cose
-$ scitt-emulator client submit-claim --url http://localhost:6000 --claim claim.cose --out claim.receipt.cbor
+$ scitt-emulator client submit-claim --url http://localhost:7000 --claim claim.cose --out claim.receipt.cbor
 Claim registered with entry ID sha384:76303a87c3ff728578d1e941ec4422193367e31fd37ab178257536cba79724d6411c457cd3c47654975dc924ff023123
 Receipt written to claim.receipt.cbor
 ```
 
-### Download Receipt from Alice's Instance
+### Download Receipt from Bob's Instance
 
 ```console
-$ scitt-emulator client retrieve-claim --url http://localhost:7000 --out federated.claim.cose --entry-id sha384:76303a87c3ff728578d1e941ec4422193367e31fd37ab178257536cba79724d6411c457cd3c47654975dc924ff023123
+$ scitt-emulator client retrieve-claim --url http://localhost:6000 --out federated.claim.cose --entry-id sha384:76303a87c3ff728578d1e941ec4422193367e31fd37ab178257536cba79724d6411c457cd3c47654975dc924ff023123
 Claim written to federated.claim.cose
-$ scitt-emulator client retrieve-receipt --url http://localhost:7000 --out federated.claim.receipt.cbor --entry-id sha384:76303a87c3ff728578d1e941ec4422193367e31fd37ab178257536cba79724d6411c457cd3c47654975dc924ff023123
+$ scitt-emulator client retrieve-receipt --url http://localhost:6000 --out federated.claim.receipt.cbor --entry-id sha384:76303a87c3ff728578d1e941ec4422193367e31fd37ab178257536cba79724d6411c457cd3c47654975dc924ff023123
 Receipt written to federated.claim.receipt.cbor
 $ scitt-emulator client verify-receipt --claim federated.claim.cose --receipt federated.claim.receipt.cbor --service-parameters workspace_alice/service_parameters.json
 Leaf hash: 7d8501f1aea9b095b9730dab05f8866c0c9d0e33e6f3f2c7131ff4a3ca1ddf61
