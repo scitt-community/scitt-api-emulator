@@ -1,0 +1,23 @@
+# Your .github/workflows/coverity.yml file.
+name: Coverity Scan
+
+# We only want to test official release code, not every pull request.
+on:
+  push:
+    branches:
+    - '**'
+
+permissions:
+  contents: read
+
+jobs:
+  coverity:
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v4
+    - uses: vapier/coverity-scan-action@cae3c096a2eb21c431961a49375ac17aea2670ce # v1.7.0
+      with:
+        email: ${{ secrets.COVERITY_SCAN_EMAIL }}
+        token: ${{ secrets.COVERITY_SCAN_TOKEN }}
+        build_language: 'other'
+        command: '--no-command --fs-capture-search ./ --fs-capture-search-exclude-regex /cov-analysis/.*'
