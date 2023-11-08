@@ -3,7 +3,11 @@
 # Virtual CCF (non-SGX) build and run:
 #   $ docker build -t ghcr.io/scitt-community/scitt-api-emulator:main --progress plain .
 #   $ docker run --rm -ti -w /src/src/scitt-api-emulator -v $PWD:/src/src/scitt-api-emulator -p 8000:8000 ghcr.io/scitt-community/scitt-api-emulator:main
-FROM python:3.8
+FROM python:3.11
+
+# CWE-269 Configure alternate docker user
+RUN useradd scitt
+USER scitt
 
 WORKDIR /usr/src/scitt-api-emulater
 
