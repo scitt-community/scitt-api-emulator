@@ -57,7 +57,9 @@ flowchart LR
     alice_receipt_created --> bob_inbox
 ```
 
-[![asciicast-federation-activitypub-bovine](https://asciinema.org/a/619517.svg)](https://asciinema.org/a/619517)
+> Below links to recording of IETF 118 SCITT Meeting, Corresponding asciinema link: https://asciinema.org/a/619517
+
+[![asciicast-federation-activitypub-bovine](https://asciinema.org/a/619517.svg)](https://www.youtube.com/watch?v=zEGob4oqca4&t=5354s)
 
 ## Dependencies
 
