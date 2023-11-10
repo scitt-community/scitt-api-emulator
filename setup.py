@@ -16,6 +16,8 @@ setup(
     install_requires=[
         "cryptography",
         "cbor2",
+        "cwt",
+        "jwcrypto",
         "pycose",
         "httpx",
         "flask",
