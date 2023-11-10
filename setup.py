@@ -38,6 +38,7 @@ setup(
             "jsonschema",
         ],
         "federation-activitypub-bovine": [
+            "tomli-w",
             "aiohttp",
             "bovine",
             "bovine-store",
