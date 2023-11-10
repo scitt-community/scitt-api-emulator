@@ -1,12 +1,13 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 import os
+import io
 import json
 import threading
 import pytest
 import jwt
 import jwcrypto
-from flask import Flask, jsonify
+from flask import Flask, jsonify, send_file
 from werkzeug.serving import make_server
 from scitt_emulator import cli, server
 from scitt_emulator.oidc import OIDCAuthMiddleware
@@ -163,6 +164,22 @@ def create_flask_app_oidc_server(config):
 
     app.config.update(dict(DEBUG=True))
     app.config.update(config)
+
+    # TODO For testing ssh key style issuers, not OIDC related needs to be moved
+    @app.route("/", methods=["GET"])
+    def ssh_public_keys():
+        from cryptography.hazmat.primitives import serialization
+        return send_file(
+            io.BytesIO(
+                serialization.load_pem_public_key(
+                    app.config["key"].export_to_pem(),
+                ).public_bytes(
+                    encoding=serialization.Encoding.OpenSSH,
+                    format=serialization.PublicFormat.OpenSSH,
+                )
+            ),
+            mimetype="text/plain",
+        )
 
     @app.route("/.well-known/openid-configuration", methods=["GET"])
     def openid_configuration():
