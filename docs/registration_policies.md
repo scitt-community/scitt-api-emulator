@@ -153,7 +153,7 @@ scitt-emulator server --workspace workspace/ --tree-alg CCF --use-lro
 Create claim from allowed issuer (`.org`) and from non-allowed (`.com`).
 
 ```console
-$ scitt-emulator client create-claim --issuer did:web:example.com --content-type application/json --payload '{"sun": "yellow"}' --out claim.cose
+$ scitt-emulator client create-claim --issuer did:web:example.com --subject "solar" --content-type application/json --payload '{"sun": "yellow"}' --out claim.cose
 A COSE-signed Claim was written to:  claim.cose
 $ scitt-emulator client submit-claim --claim claim.cose --out claim.receipt.cbor
 Traceback (most recent call last):
@@ -175,7 +175,7 @@ Failed validating 'enum' in schema['properties']['issuer']:
 On instance['issuer']:
     'did:web:example.com'
 
-$ scitt-emulator client create-claim --issuer did:web:example.org --content-type application/json --payload '{"sun": "yellow"}' --out claim.cose
+$ scitt-emulator client create-claim --issuer did:web:example.org --subject "solar" --content-type application/json --payload '{"sun": "yellow"}' --out claim.cose
 A COSE signed Claim was written to:  claim.cose
 $ scitt-emulator client submit-claim --claim claim.cose --out claim.receipt.cbor
 Claim registered with entry ID 1

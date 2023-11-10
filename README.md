@@ -93,6 +93,7 @@ They can be used with the built-in server or an external service implementation.
     ./scitt-emulator.sh client create-claim \
         --issuer did:web:example.com \
         --content-type application/json \
+        --subject 'solar' \
         --payload '{"sun": "yellow"}' \
         --out claim.cose
     ```
