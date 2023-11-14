@@ -104,108 +104,7 @@ import cryptography.hazmat.primitives.serialization
 import jwcrypto.jwk
 
 from scitt_emulator.scitt import ClaimInvalidError, CWTClaims
-
-
-def did_web_to_url(
-    did_web_string, scheme=os.environ.get("DID_WEB_ASSUME_SCHEME", "https")
-):
-    return "/".join(
-        [
-            f"{scheme}:/",
-            *[urllib.parse.unquote(i) for i in did_web_string.split(":")[2:]],
-        ]
-    )
-
-
-def verify_signature(msg: Sign1Message) -> bool:
-    """
-    - TODOs
-        - Should we use audiance? I think no, just want to make sure we've
-          documented why thought if not. No usage makes sense to me becasue we
-          don't know the intended audiance, it could be federated into
-          multiple TS
-        - Can you just pass a whole public key as an issuer?
-        - Resolve DID keys (since that is what the arch says...)
-    """
-
-    # Figure out what the issuer is
-    cwt_cose_loads = cwt.cose.COSE()._loads
-    cwt_unverified_protected = cwt_cose_loads(
-        cwt_cose_loads(msg.phdr[CWTClaims]).value[2]
-    )
-    unverified_issuer = cwt_unverified_protected[1]
-
-    if unverified_issuer.startswith("did:web:"):
-        unverified_issuer = did_web_to_url(unverified_issuer)
-
-    # Load keys from issuer
-    jwk_keys = []
-    cwt_cose_keys = []
-    pycose_cose_keys = []
-
-    from cryptography.hazmat.primitives import serialization
-
-    cryptography_ssh_keys = []
-    if "://" in unverified_issuer and not unverified_issuer.startswith("file://"):
-        # TODO Logging for URLErrors
-        # Check if OIDC issuer
-        unverified_issuer_parsed_url = urllib.parse.urlparse(unverified_issuer)
-        openid_configuration_url = unverified_issuer_parsed_url._replace(
-            path="/.well-known/openid-configuration",
-        ).geturl()
-        with contextlib.suppress(urllib.request.URLError):
-            with urllib.request.urlopen(openid_configuration_url) as response:
-                if response.status == 200:
-                    openid_configuration = json.loads(response.read())
-                    jwks_uri = openid_configuration["jwks_uri"]
-                    with urllib.request.urlopen(jwks_uri) as response:
-                        if response.status == 200:
-                            jwks = json.loads(response.read())
-                            for jwk_key_as_dict in jwks["keys"]:
-                                jwk_key_as_string = json.dumps(jwk_key_as_dict)
-                                jwk_keys.append(
-                                    jwcrypto.jwk.JWK.from_json(jwk_key_as_string),
-                                )
-
-        # Try loading ssh keys. Example: https://github.com/username.keys
-        with contextlib.suppress(urllib.request.URLError):
-            with urllib.request.urlopen(unverified_issuer) as response:
-                while line := response.readline():
-                    with contextlib.suppress(
-                        (ValueError, cryptography.exceptions.UnsupportedAlgorithm)
-                    ):
-                        cryptography_ssh_keys.append(
-                            cryptography.hazmat.primitives.serialization.load_ssh_public_key(
-                                line
-                            )
-                        )
-
-    for cryptography_ssh_key in cryptography_ssh_keys:
-        jwk_keys.append(
-            jwcrypto.jwk.JWK.from_pem(
-                cryptography_ssh_key.public_bytes(
-                    encoding=serialization.Encoding.PEM,
-                    format=serialization.PublicFormat.SubjectPublicKeyInfo,
-                )
-            )
-        )
-
-    for jwk_key in jwk_keys:
-        cwt_cose_key = cwt.COSEKey.from_pem(
-            jwk_key.export_to_pem(),
-            kid=jwk_key.thumbprint(),
-        )
-        cwt_cose_keys.append(cwt_cose_key)
-        cwt_ec2_key_as_dict = cwt_cose_key.to_dict()
-        pycose_cose_key = pycose.keys.ec2.EC2Key.from_dict(cwt_ec2_key_as_dict)
-        pycose_cose_keys.append((cwt_cose_key, pycose_cose_key))
-
-    for cwt_cose_key, pycose_cose_key in pycose_cose_keys:
-        with contextlib.suppress(Exception):
-            msg.key = pycose_cose_key
-            verify_signature = msg.verify_signature()
-            if verify_signature:
-                return cwt_cose_key, pycose_cose_key
+from scitt_emulator.verify_statement import verify_statement
 
 
 def main():
@@ -220,7 +119,7 @@ def main():
             f"Claim content type does not start with application/json: {msg.phdr[pycose.headers.ContentType]!r}"
         )
 
-    cwt_cose_key, _pycose_cose_key = verify_signature(msg)
+    cwt_cose_key, _pycose_cose_key = verify_statement(msg)
     unittest.TestCase().assertTrue(
         cwt_cose_key,
         "Failed to verify signature on statement",

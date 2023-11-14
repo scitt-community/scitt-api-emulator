@@ -10,13 +10,20 @@ setup(
     entry_points = {
         'console_scripts': [
             'scitt-emulator=scitt_emulator.cli:main'
-        ]
+        ],
+        'scitt_emulator.verify_signature.key_loaders': [
+            'did_key=scitt_emulator.key_loader_format_did_key:key_loader_format_did_key',
+            'url_referencing_oidc_issuer=scitt_emulator.key_loader_format_url_referencing_oidc_issuer:key_loader_format_url_referencing_oidc_issuer',
+            'url_referencing_ssh_authorized_keys=scitt_emulator.key_loader_format_url_referencing_ssh_authorized_keys:key_loader_format_url_referencing_ssh_authorized_keys',
+        ],
     },
     python_requires=">=3.8",
     install_requires=[
         "cryptography",
         "cbor2",
         "cwt",
+        "py-multicodec",
+        "py-multibase",
         "jwcrypto",
         "pycose",
         "httpx",
