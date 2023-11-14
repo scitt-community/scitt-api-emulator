@@ -14,6 +14,7 @@ from pycose.messages import CoseMessage, Sign1Message
 import pycose.headers
 
 from scitt_emulator.create_statement import CWTClaims
+from scitt_emulator.verify_statement import verify_statement
 
 # temporary receipt header labels, see draft-birkholz-scitt-receipts
 COSE_Headers_Service_Id = "service_id"
@@ -222,7 +223,7 @@ class SCITTServiceEmulator(ABC):
         # Note: This emulator does not verify the claim signature and does not apply
         # registration policies.
         try:
-            msg = CoseMessage.decode(claim)
+            msg = Sign1Message.decode(claim, tag=True)
         except:
             raise ClaimInvalidError("Claim is not a valid COSE message")
         if not isinstance(msg, Sign1Message):
@@ -236,7 +237,12 @@ class SCITTServiceEmulator(ABC):
         if CWTClaims not in msg.phdr:
             raise ClaimInvalidError("Claim does not have a CWTClaims header parameter")
 
-        # TODO Verify CWT
+        try:
+            cwt_cose_key, _pycose_cose_key = verify_statement(msg)
+        except Exception as e:
+            raise ClaimInvalidError("Failed to verify signature on statement") from e
+        if not cwt_cose_key:
+            raise ClaimInvalidError("Failed to verify signature on statement")
 
         # Extract fields of COSE_Sign1 for countersigning
         outer = cbor2.loads(claim)
