@@ -1,29 +1,18 @@
-import os
-import sys
-import json
-import pathlib
-import unittest
-import traceback
 import contextlib
 import urllib.parse
 import urllib.request
-import importlib.metadata
-from typing import Optional, Callable, List, Tuple
+from typing import List, Tuple
 
-import jwt
-import cbor2
 import cwt
 import cwt.algs.ec2
 import pycose
 import pycose.keys.ec2
-from pycose.messages import Sign1Message
 import cryptography.exceptions
 from cryptography.hazmat.primitives import serialization
 
 # TODO Remove this once we have a example flow for proper key verification
 import jwcrypto.jwk
 
-from scitt_emulator.scitt import ClaimInvalidError, CWTClaims
 from scitt_emulator.did_helpers import did_web_to_url
 
 

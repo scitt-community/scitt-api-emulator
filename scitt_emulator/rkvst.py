@@ -5,8 +5,7 @@ from archivist.archivist import Archivist
 from typing import Optional
 from pathlib import Path
 import json
-import cbor2
-from pycose.messages import CoseMessage, Sign1Message
+from pycose.messages import Sign1Message
 import pycose.headers
 import base64
 from os import getenv
