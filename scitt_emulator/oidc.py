@@ -2,9 +2,7 @@
 # Licensed under the MIT License.
 import jwt
 import json
-import jwcrypto.jwk
 import jsonschema
-from flask import jsonify
 from werkzeug.wrappers import Request
 from scitt_emulator.client import HttpClient
 

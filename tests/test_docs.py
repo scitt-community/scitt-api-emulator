@@ -12,11 +12,8 @@ import textwrap
 import threading
 import itertools
 import subprocess
-import contextlib
 import urllib.parse
-import unittest.mock
 
-import pytest
 import myst_parser.parsers.docutils_
 import docutils.nodes
 import docutils.utils

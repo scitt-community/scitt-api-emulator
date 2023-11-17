@@ -4,13 +4,12 @@
 from typing import Optional
 from abc import ABC, abstractmethod
 from pathlib import Path
-import contextlib
 import time
 import json
 import uuid
 
 import cbor2
-from pycose.messages import CoseMessage, Sign1Message
+from pycose.messages import Sign1Message
 import pycose.headers
 
 from scitt_emulator.create_statement import CWTClaims

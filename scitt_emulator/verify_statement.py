@@ -1,18 +1,11 @@
 import os
-import sys
-import json
-import pathlib
-import unittest
 import itertools
-import traceback
 import contextlib
 import urllib.parse
 import urllib.request
 import importlib.metadata
 from typing import Optional, Callable, List, Tuple
 
-import jwt
-import cbor2
 import cwt
 import cwt.algs.ec2
 import pycose

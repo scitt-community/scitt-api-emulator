@@ -8,7 +8,6 @@ import time
 
 import httpx
 
-import scitt_emulator.scitt as scitt
 from scitt_emulator import create_statement
 from scitt_emulator.tree_algs import TREE_ALGS
 

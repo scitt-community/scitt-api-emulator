@@ -85,23 +85,11 @@ import sys
 import json
 import pathlib
 import unittest
-import traceback
-import contextlib
-import urllib.parse
-import urllib.request
 
-import jwt
-import cbor2
 import cwt
-import cwt.algs.ec2
 import pycose
-import pycose.keys.ec2
 from pycose.messages import Sign1Message
 from jsonschema import validate, ValidationError
-import cryptography.hazmat.primitives.serialization
-
-# TODO Remove this once we have a example flow for proper key verification
-import jwcrypto.jwk
 
 from scitt_emulator.scitt import ClaimInvalidError, CWTClaims
 from scitt_emulator.verify_statement import verify_statement
