@@ -2,16 +2,27 @@
 # Licensed under the MIT License.
 import pathlib
 import argparse
-from typing import Optional
+from typing import Union, Optional
 
 import cwt
 import pycose
 import pycose.headers
 import pycose.messages
 import pycose.keys.ec2
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
+
+# NOTE These are unmaintained but the
+# https://github.com/hashberg-io/multiformats stuff and base58 modules don't
+# produce the same results:
+# https://grotto-networking.com/blog/posts/DID_Key.html#bug-in-multibase-library
+import multibase
+import multicodec
 
 # TODO jwcrypto is LGPLv3, is there another option with a permissive licence?
 import jwcrypto.jwk
+
+from scitt_emulator.did_helpers import DID_KEY_METHOD, MULTICODEC_HEX_P384_PUBLIC_KEY
 
 
 @pycose.headers.CoseHeaderAttribute.register_attribute()
@@ -40,7 +51,7 @@ class TBD(pycose.headers.CoseHeaderAttribute):
 
 def create_claim(
     claim_path: pathlib.Path,
-    issuer: str,
+    issuer: Union[str, None],
     subject: str,
     content_type: str,
     payload: str,
@@ -90,6 +101,23 @@ def create_claim(
     # cwt_cose_key_to_cose_key = cwt.algs.ec2.EC2Key.to_cose_key(cwt_cose_key)
     cwt_cose_key_to_cose_key = cwt_cose_key.to_dict()
     sign1_message_key = pycose.keys.ec2.EC2Key.from_dict(cwt_cose_key_to_cose_key)
+
+    # If issuer was not given used did:key of public key
+    if issuer is None:
+        multicodec_prefix_p_384 = "p384-pub"
+        multicodec.constants.NAME_TABLE[multicodec_prefix_p_384] = MULTICODEC_HEX_P384_PUBLIC_KEY
+        issuer = (
+            DID_KEY_METHOD
+            + multibase.encode(
+                "base58btc",
+                multicodec.add_prefix(
+                    multicodec_prefix_p_384,
+                    load_pem_private_key(key_as_pem_bytes, password=None)
+                    .public_key()
+                    .public_bytes(Encoding.X962, PublicFormat.CompressedPoint),
+                ),
+            ).decode()
+        )
 
     # CWT_Claims (label: 14 pending [CWT_CLAIM_COSE]): A CWT representing
     # the Issuer (iss) making the statement, and the Subject (sub) to
@@ -163,7 +191,7 @@ def create_claim(
 def cli(fn):
     p = fn("create-claim", description="Create a fake SCITT claim")
     p.add_argument("--out", required=True, type=pathlib.Path)
-    p.add_argument("--issuer", required=True, type=str)
+    p.add_argument("--issuer", required=False, type=str, default=None)
     p.add_argument("--subject", required=True, type=str)
     p.add_argument("--content-type", required=True, type=str)
     p.add_argument("--payload", required=True, type=str)

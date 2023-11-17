@@ -293,7 +293,9 @@ def test_docs_registration_policies(tmp_path):
         ]
         execute_cli(command)
         assert os.path.exists(receipt_path)
+        receipt_path.unlink()
         assert os.path.exists(entry_id_path)
+        receipt_path.unlink(entry_id_path)
 
         # TODO Switch back on the OIDC routes
         # submit accepted claim using OIDC -> jwks lookup
@@ -311,4 +313,6 @@ def test_docs_registration_policies(tmp_path):
         ]
         execute_cli(command)
         assert os.path.exists(receipt_path)
+        receipt_path.unlink()
         assert os.path.exists(entry_id_path)
+        receipt_path.unlink(entry_id_path)

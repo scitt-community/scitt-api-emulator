@@ -12,7 +12,6 @@ from werkzeug.serving import make_server
 from scitt_emulator import cli, server
 from scitt_emulator.oidc import OIDCAuthMiddleware
 
-issuer = "did:web:example.com"
 content_type = "application/json"
 payload = '{"foo": "bar"}'
 
@@ -72,8 +71,6 @@ def test_client_cli(use_lro: bool, tmp_path):
             "create-claim",
             "--out",
             claim_path,
-            "--issuer",
-            issuer,
             "--subject",
             "test",
             "--content-type",
@@ -265,8 +262,6 @@ def test_client_cli_token(tmp_path):
                 "create-claim",
                 "--out",
                 claim_path,
-                "--issuer",
-                issuer,
                 "--subject",
                 "test",
                 "--content-type",
