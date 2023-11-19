@@ -1,4 +1,6 @@
+import asyncio
 from dataclasses import dataclass, field
+from typing import Callable
 
 import blinker
 
@@ -25,4 +27,5 @@ class SCITTSignalsFederation:
 
 @dataclass
 class SCITTSignals:
+    add_background_task: Callable = field(default=asyncio.create_task)
     federation: SCITTSignalsFederation = field(default_factory=SCITTSignalsFederation)

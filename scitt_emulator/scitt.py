@@ -162,7 +162,7 @@ class SCITTServiceEmulator(ABC):
     
         entry = {"entryId": entry_id}
 
-        asyncio.create_task(
+        self.signals.add_background_task(
             self.signals.federation.created_entry.send_async(
                 self,
                 created_entry=SCITTSignalsFederationCreatedEntry(

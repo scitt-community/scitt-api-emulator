@@ -39,7 +39,9 @@ def create_flask_app(config):
     app.config.update(config)
 
     # See https://blinker.readthedocs.io/en/stable/#blinker.base.Signal.send
-    app.signals = SCITTSignals()
+    app.signals = SCITTSignals(
+        add_background_task=app.add_background_task,
+    )
 
     for middleware, middleware_config_path in zip(app.config["middleware"], app.config["middleware_config_path"]):
         app.asgi_app = middleware(app, app.signals, middleware_config_path)

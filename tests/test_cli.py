@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 content_type = "application/json"
 payload = '{"foo": "bar"}'
+subject = "repo:scitt-community/scitt-api-emulator:ref:refs/heads/main"
 
 old_socket_getaddrinfo = socket.getaddrinfo
 old_create_sockets = hypercorn.config.Config.create_sockets
@@ -358,7 +359,6 @@ def test_client_cli_token(tmp_path):
     key = jwcrypto.jwk.JWK.generate(kty="RSA", size=2048)
     algorithm = "RS256"
     audience = "scitt.example.org"
-    subject = "repo:scitt-community/scitt-api-emulator:ref:refs/heads/main"
 
     with Service(
         {"key": key, "algorithms": [algorithm]},

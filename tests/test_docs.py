@@ -26,6 +26,7 @@ from .test_cli import (
     Service,
     content_type,
     payload,
+    subject,
     execute_cli,
     create_flask_app_oidc_server,
 )
@@ -188,7 +189,6 @@ def test_docs_registration_policies(tmp_path):
     )
     algorithm = "ES384"
     audience = "scitt.example.org"
-    subject = "repo:scitt-community/scitt-api-emulator:ref:refs/heads/main"
 
     # tell jsonschema_validator.py that we want to assume non-TLS URLs for tests
     os.environ["DID_WEB_ASSUME_SCHEME"] = "http"
