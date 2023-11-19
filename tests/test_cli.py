@@ -114,19 +114,19 @@ class Service:
         self.services = services
 
     def __enter__(self):
-        app = self.create_flask_app(self.config)
-        if hasattr(app, "service_parameters_path"):
-            self.service_parameters_path = app.service_parameters_path
+        self.app = self.create_flask_app(self.config)
+        if hasattr(self.app, "service_parameters_path"):
+            self.service_parameters_path = self.app.service_parameters_path
         self.host = "127.0.0.1"
         addr_queue = multiprocessing.Queue()
         self.process = multiprocessing.Process(name="server", target=self.server_process,
-                                              args=(app, addr_queue,
+                                              args=(self.app, addr_queue,
                                                     self.services))
         self.process.start()
         self.host = addr_queue.get(True)
         self.port = addr_queue.get(True)
         self.url = f"http://{self.host}:{self.port}"
-        app.url = self.url
+        self.app.url = self.url
         return self
 
     def __exit__(self, *args):
