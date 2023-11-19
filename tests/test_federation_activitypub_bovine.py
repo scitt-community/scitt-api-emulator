@@ -45,7 +45,6 @@ from .test_docs import (
 
 repo_root = pathlib.Path(__file__).parents[1]
 docs_dir = repo_root.joinpath("docs")
-allowlisted_issuer = "did:web:example.org"
 
 
 def test_docs_federation_activitypub_bovine(tmp_path):
@@ -170,8 +169,6 @@ def test_docs_federation_activitypub_bovine(tmp_path):
                 "create-claim",
                 "--out",
                 claim_path,
-                "--issuer",
-                allowlisted_issuer,
                 "--subject",
                 subject,
                 "--content-type",
