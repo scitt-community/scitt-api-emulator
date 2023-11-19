@@ -205,14 +205,14 @@ def test_docs_registration_policies(tmp_path):
         }
     ) as service, SimpleFileBasedPolicyEngine(
         {
-            "storage_path": service.server.app.scitt_service.storage_path,
+            "storage_path": service.app.scitt_service.storage_path,
             "enforce_policy": tmp_path.joinpath("enforce_policy.py"),
             "jsonschema_validator": tmp_path.joinpath("jsonschema_validator.py"),
             "schema_path": tmp_path.joinpath("allowlist.schema.json"),
         }
     ) as policy_engine:
         # set the policy to enforce
-        service.server.app.scitt_service.service_parameters["insertPolicy"] = "external"
+        service.app.scitt_service.service_parameters["insertPolicy"] = "external"
 
         # set the issuer to the did:web version of the OIDC / SSH keys service
         issuer = url_to_did_web(oidc_service.url)

@@ -151,6 +151,9 @@ class Service:
                         server_name, server_port = sockets.insecure_sockets[0].getsockname()
                         addr_queue.put(server_name)
                         addr_queue.put(server_port)
+                        app.host = server_name
+                        app.port = server_port
+                        app.url = f"http://{app.host}:{app.port}"
                         # Ensure that connect calls to them resolve as we want
                         exit_stack.enter_context(
                             unittest.mock.patch(
