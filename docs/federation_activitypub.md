@@ -177,7 +177,7 @@ $ scitt-emulator server \
 ### Create and Submit Statement to Alice's Instance
 
 ```console
-$ scitt-emulator client create-claim --issuer did:web:example.org --content-type application/json --payload '{"sun": "yellow"}' --out claim.cose
+$ scitt-emulator client create-claim --issuer did:web:example.org --content-type application/json --subject solar --payload '{"sun": "yellow"}' --out claim.cose
 Claim written to claim.cose
 $ scitt-emulator client submit-claim --url http://localhost:7000 --claim claim.cose --out claim.receipt.cbor
 Claim registered with entry ID sha384:76303a87c3ff728578d1e941ec4422193367e31fd37ab178257536cba79724d6411c457cd3c47654975dc924ff023123
