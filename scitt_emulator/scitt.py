@@ -73,7 +73,10 @@ class SCITTServiceEmulator(ABC):
         )
 
     async def signal_receiver_submit_claim(self, _sender, claim: bytes) -> None:
-        await self.submit_claim(claim, long_running=False)
+        use_lro = self.service_parameters.get("use_lro", False)
+        result = await self.submit_claim(claim, long_running=use_lro)
+        while use_lro and result["status"] == "running":
+            result = await self._finish_operation(result)
 
     @abstractmethod
     def initialize_service(self):
