@@ -96,15 +96,15 @@ def create_flask_app(config):
         if is_unavailable():
             return await make_unavailable_error()
         try:
-            if use_lro:
-                result = app.scitt_service.submit_claim(await request.get_data(), long_running=True)
+            # NOTE This got refactored to support content addressable claims
+            result = app.scitt_service.submit_claim(await request.get_data(), long_running=use_lro)
+            if "operationId" in result:
                 headers = {
                     "Location": f"{request.host_url}/operations/{result['operationId']}",
                     "Retry-After": "1"
                 }
                 status_code = 202
             else:
-                result = app.scitt_service.submit_claim(await request.get_data(), long_running=False)
                 headers = {
                     "Location": f"{request.host_url}/entries/{result['entryId']}",
                 }
