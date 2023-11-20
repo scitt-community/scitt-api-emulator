@@ -390,8 +390,8 @@ def test_client_cli_token(tmp_path):
         )
         with Service(
             {
-                "middleware": OIDCAuthMiddleware,
-                "middleware_config_path": middleware_config_path,
+                "middleware": [OIDCAuthMiddleware],
+                "middleware_config_path": [middleware_config_path],
                 "tree_alg": "CCF",
                 "workspace": workspace_path,
                 "error_rate": 0.1,
