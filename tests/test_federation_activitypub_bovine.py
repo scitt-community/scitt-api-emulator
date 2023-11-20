@@ -45,6 +45,7 @@ from .test_cli import (
 from .test_docs import (
     docutils_recursively_extract_nodes,
     docutils_find_code_samples,
+    SimpleFileBasedPolicyEngine,
 )
 
 
@@ -69,7 +70,14 @@ async def test_docs_federation_activitypub_bovine(anyio_backend, tmp_path):
     for name, content in docutils_find_code_samples(nodes).items():
         tmp_path.joinpath(name).write_text(content)
 
+    # Allow any issuers
+    allowlist_schema_json_path = tmp_path.joinpath("allowlist.schema.json")
+    allowlist_schema_json = json.loads(allowlist_schema_json_path.read_text())
+    del allowlist_schema_json["properties"]["issuer"]["enum"]
+    allowlist_schema_json_path.write_text(json.dumps(allowlist_schema_json))
+
     services = {}
+    policy_engines = {}
     bovine_clients = {}
     services_path = tmp_path / "services.json"
 
@@ -125,6 +133,8 @@ async def test_docs_federation_activitypub_bovine(anyio_backend, tmp_path):
             service_parameters_path=service_parameters_path,
         ).initialize_service()
         service_parameters = json.loads(service_parameters_path.read_text())
+        service_parameters["use_lro"] = True
+        service_parameters["insertPolicy"] = "external"
         # TODO Decide on how we offer extensions for more federation protocols
         # and declare which version is in use. We would need an extension doc
         # which describes the format of this blob and how to intrepret it
@@ -145,7 +155,6 @@ async def test_docs_federation_activitypub_bovine(anyio_backend, tmp_path):
             }
         ]
         service_parameters_path.write_text(json.dumps(service_parameters))
-
         services[handle_name] = Service(
             {
                 "middleware": [TestSCITTFederationActivityPubBovine],
@@ -153,9 +162,17 @@ async def test_docs_federation_activitypub_bovine(anyio_backend, tmp_path):
                 "tree_alg": "CCF",
                 "workspace": workspace_path,
                 "error_rate": 0,
-                "use_lro": False,
+                "use_lro": True,
             },
             services=services_path,
+        )
+        policy_engines[handle_name] = SimpleFileBasedPolicyEngine(
+            {
+                "storage_path": storage_path,
+                "enforce_policy": tmp_path.joinpath("enforce_policy.py"),
+                "jsonschema_validator": tmp_path.joinpath("jsonschema_validator.py"),
+                "schema_path": tmp_path.joinpath("allowlist.schema.json"),
+            }
         )
 
 
@@ -181,6 +198,8 @@ async def test_docs_federation_activitypub_bovine(anyio_backend, tmp_path):
                 socket.getaddrinfo(f"scitt.{handle_name}.example.com", 0)[0][-1][-1]
                 == services[handle_name].port
             )
+            # Start the policy engine for the service
+            policy_engines[handle_name] = exit_stack.enter_context(policy_engines[handle_name])
 
         # Serialize services
         services_path.write_text(
