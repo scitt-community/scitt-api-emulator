@@ -20,6 +20,8 @@ import docutils.utils
 
 import jwcrypto
 
+from scitt_emulator.tree_algs import TREE_ALGS
+from scitt_emulator.signals import SCITTSignals
 from scitt_emulator.client import ClaimOperationError
 
 from .test_cli import (
@@ -193,27 +195,38 @@ def test_docs_registration_policies(tmp_path):
     # tell jsonschema_validator.py that we want to assume non-TLS URLs for tests
     os.environ["DID_WEB_ASSUME_SCHEME"] = "http"
 
+    # ensure we use the policy engine
+    storage_path = workspace_path / "storage"
+    storage_path.mkdir(parents=True)
+    service_parameters_path = workspace_path / "service_parameters.json"
+    tree_alg = "CCF"
+    TREE_ALGS[tree_alg](
+        signals=SCITTSignals(),
+        storage_path=storage_path,
+        service_parameters_path=service_parameters_path,
+    ).initialize_service()
+    service_parameters = json.loads(service_parameters_path.read_text())
+    service_parameters["insertPolicy"] = "external"
+    service_parameters_path.write_text(json.dumps(service_parameters))
+
     with Service(
         {"key": key, "algorithms": [algorithm]},
         create_flask_app=create_flask_app_oidc_server,
     ) as oidc_service, Service(
         {
-            "tree_alg": "CCF",
+            "tree_alg": tree_alg,
             "workspace": workspace_path,
             "error_rate": 0.1,
             "use_lro": True,
         }
     ) as service, SimpleFileBasedPolicyEngine(
         {
-            "storage_path": service.app.scitt_service.storage_path,
+            "storage_path": storage_path,
             "enforce_policy": tmp_path.joinpath("enforce_policy.py"),
             "jsonschema_validator": tmp_path.joinpath("jsonschema_validator.py"),
             "schema_path": tmp_path.joinpath("allowlist.schema.json"),
         }
     ) as policy_engine:
-        # set the policy to enforce
-        service.app.scitt_service.service_parameters["insertPolicy"] = "external"
-
         # set the issuer to the did:web version of the OIDC / SSH keys service
         issuer = url_to_did_web(oidc_service.url)
 
