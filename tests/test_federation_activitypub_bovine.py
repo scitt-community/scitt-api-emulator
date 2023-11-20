@@ -23,6 +23,8 @@ import myst_parser.parsers.docutils_
 import docutils.nodes
 import docutils.utils
 
+from scitt_emulator.tree_algs import TREE_ALGS
+from scitt_emulator.signals import SCITTSignals
 from scitt_emulator.client import ClaimOperationError
 from scitt_emulator.federation_activitypub_bovine import (
     SCITTFederationActivityPubBovine,
@@ -105,12 +107,46 @@ def test_docs_federation_activitypub_bovine(tmp_path):
                 }
             )
         )
+
+        # ensure service parameters include methods service can federate by
+        workspace_path = tmp_path / handle_name / "workspace"
+        storage_path = workspace_path / "storage"
+        storage_path.mkdir(parents=True)
+        service_parameters_path = workspace_path / "service_parameters.json"
+        tree_alg = "CCF"
+        TREE_ALGS[tree_alg](
+            signals=SCITTSignals(),
+            storage_path=storage_path,
+            service_parameters_path=service_parameters_path,
+        ).initialize_service()
+        service_parameters = json.loads(service_parameters_path.read_text())
+        # TODO Decide on how we offer extensions for more federation protocols
+        # and declare which version is in use. We would need an extension doc
+        # which describes the format of this blob and how to intrepret it
+        # https://github.com/ietf-wg-scitt/draft-ietf-scitt-architecture/issues/79#issuecomment-1797016940
+        service_parameters["federation"] = [
+            {
+                "protocol": "https://github.com/w3c/activitypub",
+                "version": "https://github.com/w3c/activitypub/commit/cda0c902317f194daeeb50b2df0225bca5b06f52",
+                "activitypub": {
+                    "actors": {
+                        handle_name: {
+                            # SCITT_ALL_SUBJECTS would be a special value
+                            # We'd want to have extension docs explain more
+                            "subjects": "SCITT_ALL_SUBJECTS",
+                        }
+                    }
+                }
+            }
+        ]
+        service_parameters_path.write_text(json.dumps(service_parameters))
+
         services[handle_name] = Service(
             {
                 "middleware": [TestSCITTFederationActivityPubBovine],
                 "middleware_config_path": [middleware_config_path],
                 "tree_alg": "CCF",
-                "workspace": tmp_path / handle_name / "workspace",
+                "workspace": workspace_path,
                 "error_rate": 0,
                 "use_lro": False,
             },
@@ -157,6 +193,8 @@ def test_docs_federation_activitypub_bovine(tmp_path):
                 side_effect=make_MockClientRequest(services),
             )
         )
+
+        # TODO Poll following endpoints until all services are following each other
 
         # Create claims in each instance
         claims = []
@@ -209,7 +247,10 @@ def test_docs_federation_activitypub_bovine(tmp_path):
                 }
             )
 
-        # time.sleep(100)
+        time.sleep(1)
+        import pprint
+        pprint.pprint(claims)
+        time.sleep(100)
 
         # Test that we can download claims from all instances federated with
         for handle_name, service in services.items():

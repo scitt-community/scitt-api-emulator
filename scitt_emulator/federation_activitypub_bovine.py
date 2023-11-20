@@ -168,6 +168,7 @@ async def handle(
 ):
     try:
         logger.info(f"{__file__}:handle(handler_event={handler_event})")
+        print(f"{__file__}:handle(handler_event={handler_event})")
         match handler_event:
             case HandlerEvent.OPENED:
                 # Listen for events from SCITT
@@ -177,7 +178,7 @@ async def handle(
                     created_entry: SCITTSignalsFederationCreatedEntry = None,
                 ):
                     nonlocal client
-                    asyncio.create_task(
+                    signals.add_background_task(
                         federate_created_entries(client, sender, created_entry)
                     )
 
@@ -202,6 +203,9 @@ async def handle(
             case HandlerEvent.CLOSED:
                 return
             case HandlerEvent.DATA:
+                print(
+                    f"Got new data in ActivityPub inbox: {pprint.pformat(data)}"
+                )
                 logger.info(
                     "Got new data in ActivityPub inbox: %s", pprint.pformat(data)
                 )
@@ -251,6 +255,9 @@ async def handle(
                         client, claim=claim
                     )
     except Exception as ex:
+        print(ex)
+        import traceback
+        traceback.print_exc()
         logger.error(ex)
         logger.exception(ex)
         logger.error(json.dumps(data))
