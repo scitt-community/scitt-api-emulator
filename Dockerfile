@@ -5,10 +5,6 @@
 #   $ docker run --rm -ti -w /src/src/scitt-api-emulator -v $PWD:/src/src/scitt-api-emulator -p 8000:8000 ghcr.io/scitt-community/scitt-api-emulator:main
 FROM python:3.11
 
-# CWE-269 Configure alternate docker user
-RUN useradd scitt
-USER scitt
-
 WORKDIR /usr/src/scitt-api-emulater
 
 COPY setup.py ./
@@ -18,5 +14,9 @@ RUN mkdir -p scitt_emulater \
 COPY . .
 
 RUN pip install --no-cache-dir -e .
+
+# CWE-269 Configure alternate docker user
+RUN useradd scitt
+USER scitt
 
 CMD scitt-emulator server --workspace workspace/ --tree-alg CCF
