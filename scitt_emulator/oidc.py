@@ -28,8 +28,9 @@ class OIDCAuthMiddleware:
             self.jwks_clients[issuer] = jwt.PyJWKClient(self.oidc_configs[issuer]["jwks_uri"])
 
     async def __call__(self, scope, receive, send):
-        headers = scope.get("headers", {})
-        claims = self.validate_token(headers.get("Authorization", "").replace("Bearer ", ""))
+        headers = dict(scope.get("headers", []))
+        token = headers.get(b"authorization", "").replace(b"Bearer ", b"").decode()
+        claims = self.validate_token(token)
         if "claim_schema" in self.config and claims["iss"] in self.config["claim_schema"]:
             jsonschema.validate(claims, schema=self.config["claim_schema"][claims["iss"]])
         return await self.asgi_app(scope, receive, send)
