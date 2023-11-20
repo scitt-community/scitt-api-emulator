@@ -178,9 +178,8 @@ async def handle(
                     created_entry: SCITTSignalsFederationCreatedEntry = None,
                 ):
                     nonlocal client
-                    signals.add_background_task(
-                        federate_created_entries(client, sender, created_entry)
-                    )
+                    nonlocal signals
+                    await federate_created_entries(client, sender, created_entry)
 
                 client.federate_created_entries = types.MethodType(
                     signals.federation.created_entry.connect(
@@ -251,7 +250,7 @@ async def handle(
                     # Send signal to submit federated claim
                     # TODO Announce that this entry ID was created via
                     # federation to avoid an infinate loop
-                    signals.federation.submit_claim.send(
+                    await signals.federation.submit_claim.send_async(
                         client, claim=claim
                     )
     except Exception as ex:
@@ -294,6 +293,13 @@ async def federate_created_entries(
     sender: SCITTServiceEmulator,
     created_entry: SCITTSignalsFederationCreatedEntry = None,
 ):
+    print()
+    print()
+    print()
+    print(client, sender, created_entry)
+    print()
+    print()
+    print()
     try:
         logger.info("federate_created_entry() created_entry: %r", created_entry)
         note = (

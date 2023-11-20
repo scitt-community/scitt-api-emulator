@@ -228,8 +228,6 @@ async def test_docs_federation_activitypub_bovine(anyio_backend, tmp_path):
         # Create claims in each instance
         claims = []
         for handle_name, service in services.items():
-            our_service = services[handle_name]
-
             # create claim
             command = [
                 "client",
@@ -276,6 +274,8 @@ async def test_docs_federation_activitypub_bovine(anyio_backend, tmp_path):
                 }
             )
 
+        # await asyncio.sleep(100)
+
         # Test that we can download claims from all instances federated with
         for handle_name, service in services.items():
             for claim in claims:
@@ -301,7 +301,7 @@ async def test_docs_federation_activitypub_bovine(anyio_backend, tmp_path):
                 # TODO Retry with backoff with cap
                 # TODO Remove try except, fix federation
                 error = None
-                for i in range(0, 50):
+                for i in range(0, 10):
                     try:
                         execute_cli(command)
                         break

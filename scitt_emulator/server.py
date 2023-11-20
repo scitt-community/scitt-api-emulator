@@ -97,7 +97,7 @@ def create_flask_app(config):
             return await make_unavailable_error()
         try:
             # NOTE This got refactored to support content addressable claims
-            result = app.scitt_service.submit_claim(await request.get_data(), long_running=use_lro)
+            result = await app.scitt_service.submit_claim(await request.get_data(), long_running=use_lro)
             if "operationId" in result:
                 headers = {
                     "Location": f"{request.host_url}/operations/{result['operationId']}",
@@ -118,7 +118,7 @@ def create_flask_app(config):
         if is_unavailable():
             return await make_unavailable_error()
         try:
-            operation = app.scitt_service.get_operation(operation_id)
+            operation = await app.scitt_service.get_operation(operation_id)
         except OperationNotFoundError as e:
             return await make_error("operationNotFound", str(e), 404)
         headers = {}

@@ -72,8 +72,8 @@ class SCITTServiceEmulator(ABC):
             self.signal_receiver_submit_claim,
         )
 
-    def signal_receiver_submit_claim(self, _sender, claim: bytes) -> None:
-        self.submit_claim(claim, long_running=False)
+    async def signal_receiver_submit_claim(self, _sender, claim: bytes) -> None:
+        await self.submit_claim(claim, long_running=False)
 
     @abstractmethod
     def initialize_service(self):
@@ -87,7 +87,7 @@ class SCITTServiceEmulator(ABC):
     def verify_receipt_contents(receipt_contents: list, countersign_tbi: bytes):
         raise NotImplementedError
 
-    def get_operation(self, operation_id: str) -> dict:
+    async def get_operation(self, operation_id: str) -> dict:
         operation_path = self.operations_path / f"{operation_id}.json"
         try:
             with open(operation_path, "r") as f:
@@ -98,7 +98,7 @@ class SCITTServiceEmulator(ABC):
         if operation["status"] == "running":
             # Pretend that the service finishes the operation after
             # the client having checked the operation status once.
-            operation = self._finish_operation(operation)
+            operation = await self._finish_operation(operation)
         return operation
 
     def get_entry(self, entry_id: str) -> dict:
@@ -118,7 +118,7 @@ class SCITTServiceEmulator(ABC):
             raise EntryNotFoundError(f"Entry {entry_id} not found")
         return claim
 
-    def submit_claim(self, claim: bytes, long_running=True) -> dict:
+    async def submit_claim(self, claim: bytes, long_running=True) -> dict:
         insert_policy = self.service_parameters.get("insertPolicy", DEFAULT_INSERT_POLICY)
 
         try:
@@ -134,7 +134,7 @@ class SCITTServiceEmulator(ABC):
                 f"non-* insertPolicy only works with long_running=True: {insert_policy!r}"
             )
         else:
-            return self._create_entry(claim)
+            return await self._create_entry(claim)
 
     def public_service_parameters(self) -> bytes:
         # TODO Only export public portion of cert
@@ -150,7 +150,7 @@ class SCITTServiceEmulator(ABC):
         entry_id = f"{entry_id_hash_alg}:{entry_id_hash.hexdigest()}"
         return entry_id
 
-    def _create_entry(self, claim: bytes) -> dict:
+    async def _create_entry(self, claim: bytes) -> dict:
         entry_id = self.get_entry_id(claim)
 
         receipt = self._create_receipt(claim, entry_id)
@@ -162,16 +162,14 @@ class SCITTServiceEmulator(ABC):
     
         entry = {"entryId": entry_id}
 
-        self.signals.add_background_task(
-            self.signals.federation.created_entry.send_async(
-                self,
-                created_entry=SCITTSignalsFederationCreatedEntry(
-                    tree_alg=self.tree_alg,
-                    entry_id=entry_id,
-                    receipt=receipt,
-                    claim=claim,
-                    public_service_parameters=self.public_service_parameters(),
-                )
+        await self.signals.federation.created_entry.send_async(
+            self,
+            created_entry=SCITTSignalsFederationCreatedEntry(
+                tree_alg=self.tree_alg,
+                entry_id=entry_id,
+                receipt=receipt,
+                claim=claim,
+                public_service_parameters=self.public_service_parameters(),
             )
         )
 
@@ -233,7 +231,7 @@ class SCITTServiceEmulator(ABC):
 
         return policy_result
 
-    def _finish_operation(self, operation: dict):
+    async def _finish_operation(self, operation: dict):
         operation_id = operation["operationId"]
         operation_path = self.operations_path / f"{operation_id}.json"
         claim_src_path = self.operations_path / f"{operation_id}.cose"
@@ -250,7 +248,7 @@ class SCITTServiceEmulator(ABC):
             return operation
 
         claim = claim_src_path.read_bytes()
-        entry = self._create_entry(claim)
+        entry = await self._create_entry(claim)
         claim_src_path.unlink()
 
         operation["status"] = "succeeded"
