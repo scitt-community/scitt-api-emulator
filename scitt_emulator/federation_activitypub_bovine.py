@@ -43,8 +43,8 @@ logger = logging.getLogger(__name__)
 
 
 class SCITTFederationActivityPubBovine(SCITTFederation):
-    def __init__(self, app, signals, config_path):
-        super().__init__(app, signals, config_path)
+    def __init__(self, app, config_path):
+        super().__init__(app, config_path)
 
         self.handle_name = self.config["handle_name"]
         self.fqdn = self.config.get("fqdn", None)
@@ -101,7 +101,7 @@ class SCITTFederationActivityPubBovine(SCITTFederation):
         config_toml_obj[self.handle_name]["handlers"][
             inspect.getmodule(sys.modules[__name__]).__spec__.name
         ] = {
-            "signals": self.signals,
+            "signals": self.app.signals,
             "following": self.config.get("following", {}),
         }
 
@@ -247,7 +247,7 @@ async def handle(
                     # Send signal to submit federated claim
                     # TODO Announce that this entry ID was created via
                     # federation to avoid an infinate loop
-                    await signals.federation.submit_claim.send_async(
+                    signals.federation.submit_claim.send(
                         client, claim=claim
                     )
     except Exception as ex:
