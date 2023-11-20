@@ -8,7 +8,7 @@ from scitt_emulator.signals import SCITTSignals, SCITTSignalsFederationCreatedEn
 
 
 class SCITTFederation(ABC):
-    def __init__(self, app, signals: SCITTSignals, config_path: Path):
+    def __init__(self, app, config_path: Path):
         self.app = app
         self.asgi_app = app.asgi_app
         self.config = {}
