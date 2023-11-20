@@ -7,11 +7,14 @@ import json
 import copy
 import types
 import pathlib
+import logging
 import tempfile
 import textwrap
 import threading
 import itertools
+import traceback
 import subprocess
+import contextlib
 import urllib.parse
 
 import myst_parser.parsers.docutils_
@@ -32,6 +35,8 @@ from .test_cli import (
     execute_cli,
     create_flask_app_oidc_server,
 )
+
+logger = logging.getLogger(__name__)
 
 
 repo_root = pathlib.Path(__file__).parents[1]
@@ -88,7 +93,14 @@ class SimpleFileBasedPolicyEngine:
         while running:
             for cose_path in operations_path.glob("*.cose"):
                 denial = copy.deepcopy(CLAIM_DENIED_ERROR)
-                with open(cose_path, "rb") as stdin_fileobj:
+                with contextlib.ExitStack() as exit_stack:
+                    try:
+                        stdin_fileobj = exit_stack.enter_context(
+                            open(cose_path, "rb"),
+                        )
+                    except:
+                        logger.error(traceback.format_exc())
+                        continue
                     env = {
                         **os.environ,
                         "SCHEMA_PATH": str(config["schema_path"].resolve()),
