@@ -7,6 +7,7 @@ import json
 import copy
 import types
 import socket
+import asyncio
 import pathlib
 import tempfile
 import textwrap
@@ -19,9 +20,11 @@ import unittest.mock
 
 import aiohttp
 import pytest
+import tomllib
 import myst_parser.parsers.docutils_
 import docutils.nodes
 import docutils.utils
+import bovine
 
 from scitt_emulator.tree_algs import TREE_ALGS
 from scitt_emulator.signals import SCITTSignals
@@ -49,7 +52,8 @@ repo_root = pathlib.Path(__file__).parents[1]
 docs_dir = repo_root.joinpath("docs")
 
 
-def test_docs_federation_activitypub_bovine(tmp_path):
+@pytest.mark.parametrize('anyio_backend', ['asyncio'])
+async def test_docs_federation_activitypub_bovine(anyio_backend, tmp_path):
     claim_path = tmp_path / "claim.cose"
     receipt_path = tmp_path / "claim.receipt.cbor"
     entry_id_path = tmp_path / "claim.entry_id.txt"
@@ -66,6 +70,7 @@ def test_docs_federation_activitypub_bovine(tmp_path):
         tmp_path.joinpath(name).write_text(content)
 
     services = {}
+    bovine_clients = {}
     services_path = tmp_path / "services.json"
 
     MockClientRequest = make_MockClientRequest(services_path)
@@ -153,6 +158,10 @@ def test_docs_federation_activitypub_bovine(tmp_path):
             services=services_path,
         )
 
+
+    # TODO __aexit__
+    async_exit_stack = await contextlib.AsyncExitStack().__aenter__()
+
     with contextlib.ExitStack() as exit_stack:
         # Ensure that connect calls to them resolve as we want
         exit_stack.enter_context(
@@ -172,6 +181,7 @@ def test_docs_federation_activitypub_bovine(tmp_path):
                 socket.getaddrinfo(f"scitt.{handle_name}.example.com", 0)[0][-1][-1]
                 == services[handle_name].port
             )
+
         # Serialize services
         services_path.write_text(
             json.dumps(
@@ -194,7 +204,26 @@ def test_docs_federation_activitypub_bovine(tmp_path):
             )
         )
 
-        # TODO Poll following endpoints until all services are following each other
+        # Ensure we have a client for each service
+        for handle_name, service in services.items():
+            config_toml_path = tmp_path / handle_name / "config.toml"
+            config_toml_obj = {}
+            while not config_toml_path.exists() or len(config_toml_obj) == 0:
+                await asyncio.sleep(0.1)
+                if config_toml_path.exists():
+                    config_toml_obj = tomllib.loads(config_toml_path.read_text())
+            bovine_clients[handle_name] = await async_exit_stack.enter_async_context(
+                bovine.BovineClient(**config_toml_obj[handle_name])
+            )
+
+        # Poll following endpoints until all services are following each other
+        for handle_name, client in bovine_clients.items():
+            count_accepts = 0
+            while count_accepts != (len(bovine_clients) - 1):
+                count_accepts = 0
+                async for message in client.outbox():
+                    if message["type"] == "Accept":
+                        count_accepts += 1
 
         # Create claims in each instance
         claims = []
@@ -246,11 +275,6 @@ def test_docs_federation_activitypub_bovine(tmp_path):
                     "service.handle_name": handle_name,
                 }
             )
-
-        time.sleep(1)
-        import pprint
-        pprint.pprint(claims)
-        time.sleep(100)
 
         # Test that we can download claims from all instances federated with
         for handle_name, service in services.items():
