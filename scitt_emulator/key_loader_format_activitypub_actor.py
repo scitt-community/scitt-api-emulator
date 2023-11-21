@@ -15,7 +15,7 @@ import jwcrypto.jwk
 
 
 
-def key_loader_format_url_referencing_activitypub_actor(
+def key_loader_format_activitypub_actor(
     unverified_issuer: str,
 ) -> List[Tuple[cwt.COSEKey, pycose.keys.ec2.EC2Key]]:
     """
@@ -42,7 +42,7 @@ def key_loader_format_url_referencing_activitypub_actor(
     ...         self.wfile.write(contents)
     >>>
     >>> with httptest.Server(TestHTTPServer) as ts:
-    ...     len(key_loader_format_url_referencing_activitypub_actor(f"alice@{ts.url()[:-1]}"))
+    ...     len(key_loader_format_activitypub_actor(f"alice@{ts.url()[:-1]}"))
     1
     """
     jwk_keys = []
