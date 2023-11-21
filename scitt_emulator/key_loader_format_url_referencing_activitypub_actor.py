@@ -19,6 +19,7 @@ def key_loader_format_url_referencing_activitypub_actor(
     unverified_issuer: str,
 ) -> List[Tuple[cwt.COSEKey, pycose.keys.ec2.EC2Key]]:
     """
+    >>> import jwcrypto
     >>> import httptest
     >>>
     >>> class TestHTTPServer(httptest.Handler):
@@ -28,9 +29,9 @@ def key_loader_format_url_referencing_activitypub_actor(
     ...         response = {"status": "failure"}
     ...         if self.path.startswith("/.well-known/webfinger?resource="):
     ...             # TODO Add server url as prefix
-    ...             response = {"links": [{"href": "/endpoint/alice"}]}
+    ...             response = {"links": [{"href": f"http://localhost:{self.server.server_port}/endpoint/alice"}]}
     ...         elif self.path.startswith("/endpoint/"):
-    ...             response = {"status": "TODO"}
+    ...             response = {"publicKey": {"publicKeyPem": jwcrypto.jwk.JWK.generate(kty="EC", crv="P-384").export_to_pem().decode()}}
     ...         else:
     ...             status_code = 400
     ...         contents = json.dumps(response).encode()
@@ -41,7 +42,8 @@ def key_loader_format_url_referencing_activitypub_actor(
     ...         self.wfile.write(contents)
     >>>
     >>> with httptest.Server(TestHTTPServer) as ts:
-    ...     key_loader_format_url_referencing_activitypub_actor(f"alice@{ts.url()[:-1]}")
+    ...     len(key_loader_format_url_referencing_activitypub_actor(f"alice@{ts.url()[:-1]}"))
+    1
     """
     jwk_keys = []
     cwt_cose_keys = []
@@ -67,7 +69,19 @@ def key_loader_format_url_referencing_activitypub_actor(
 
     # Webfinger the account
     with urllib.request.urlopen(f"{domain}/.well-known/webfinger?resource=acct:{handle_name}@{domain_no_scheme}") as response:
-        with urllib.request.urlopen(json.load(response)["links"][0]["href"]) as response:
-            public_key_pem = json.load(response)["publicKey"]["publicKeyPem"]
-            # TODO
-            jwcrypto.jwk.JWK().from_pem(public_key_pem)
+        for link in json.load(response)["links"]:
+            with urllib.request.urlopen(link["href"]) as response:
+                public_key_pem = json.load(response)["publicKey"]["publicKeyPem"]
+                jwk_keys.append(jwcrypto.jwk.JWK.from_pem(public_key_pem.encode()))
+
+    for jwk_key in jwk_keys:
+        cwt_cose_key = cwt.COSEKey.from_pem(
+            jwk_key.export_to_pem(),
+            kid=jwk_key.thumbprint(),
+        )
+        cwt_cose_keys.append(cwt_cose_key)
+        cwt_ec2_key_as_dict = cwt_cose_key.to_dict()
+        pycose_cose_key = pycose.keys.ec2.EC2Key.from_dict(cwt_ec2_key_as_dict)
+        pycose_cose_keys.append((cwt_cose_key, pycose_cose_key))
+
+    return pycose_cose_keys
