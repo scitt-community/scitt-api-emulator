@@ -15,7 +15,6 @@ setup(
             'did_key=scitt_emulator.key_loader_format_did_key:key_loader_format_did_key',
             'url_referencing_oidc_issuer=scitt_emulator.key_loader_format_url_referencing_oidc_issuer:key_loader_format_url_referencing_oidc_issuer',
             'url_referencing_ssh_authorized_keys=scitt_emulator.key_loader_format_url_referencing_ssh_authorized_keys:key_loader_format_url_referencing_ssh_authorized_keys',
-            'activitypub_actor=scitt_emulator.key_loader_format_activitypub_actor:key_loader_format_activitypub_actor',
         ],
     },
     python_requires=">=3.8",
