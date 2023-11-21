@@ -1,3 +1,4 @@
+import os
 import json
 import contextlib
 import urllib.parse
@@ -12,23 +13,61 @@ import pycose.keys.ec2
 # TODO Remove this once we have a example flow for proper key verification
 import jwcrypto.jwk
 
-from scitt_emulator.did_helpers import did_web_to_url
 
 
 def key_loader_format_url_referencing_activitypub_actor(
     unverified_issuer: str,
 ) -> List[Tuple[cwt.COSEKey, pycose.keys.ec2.EC2Key]]:
+    """
+    >>> import httptest
+    >>>
+    >>> class TestHTTPServer(httptest.Handler):
+    ...
+    ...     def do_GET(self):
+    ...         status_code = 200
+    ...         response = {"status": "failure"}
+    ...         if self.path.startswith("/.well-known/webfinger?resource="):
+    ...             # TODO Add server url as prefix
+    ...             response = {"links": [{"href": "/endpoint/alice"}]}
+    ...         elif self.path.startswith("/endpoint/"):
+    ...             response = {"status": "TODO"}
+    ...         else:
+    ...             status_code = 400
+    ...         contents = json.dumps(response).encode()
+    ...         self.send_response(status_code)
+    ...         self.send_header("Content-type", "application/json")
+    ...         self.send_header("Content-length", len(contents))
+    ...         self.end_headers()
+    ...         self.wfile.write(contents)
+    >>>
+    >>> with httptest.Server(TestHTTPServer) as ts:
+    ...     key_loader_format_url_referencing_activitypub_actor(f"alice@{ts.url()[:-1]}")
+    """
     jwk_keys = []
     cwt_cose_keys = []
     pycose_cose_keys = []
 
     # TODO Support for lookup by did:key, also, is that just bonvie that does
     # that via webfinger? Need to check
-    if (
-        not unverified_issuer.startswith("did:web:")
-        or urllib.parse.quote("webfinger?resource=") not in unverified_issuer
-    ):
+    # if (
+    #     not unverified_issuer.startswith("did:web:")
+    #     or urllib.parse.quote("webfinger?resource=") not in unverified_issuer
+    # ):
+    #     return pycose_cose_keys
+    if "@" not in unverified_issuer:
         return pycose_cose_keys
 
-    # export DOMAIN="scitt.unstable.chadig.com"; curl -s $(curl -s "https://${DOMAIN}/.well-known/webfinger?resource=acct:bovine@${DOMAIN}" | jq -r .links[0].href) | jq -r .publicKey.publicKeyPem
-    raise NotImplementedError()
+    handle_name, domain = unverified_issuer.split("@", maxsplit=1)
+    scheme = os.environ.get("DID_WEB_ASSUME_SCHEME", "https")
+    if "://" in domain:
+        scheme = domain.split("://")[0]
+    if not domain.startswith(scheme):
+        domain = f"{scheme}://{domain}"
+    domain_no_scheme = domain.replace(f"{scheme}://", "", 1)
+
+    # Webfinger the account
+    with urllib.request.urlopen(f"{domain}/.well-known/webfinger?resource=acct:{handle_name}@{domain_no_scheme}") as response:
+        with urllib.request.urlopen(json.load(response)["links"][0]["href"]) as response:
+            public_key_pem = json.load(response)["publicKey"]["publicKeyPem"]
+            # TODO
+            jwcrypto.jwk.JWK().from_pem(public_key_pem)
