@@ -4,19 +4,20 @@
 from typing import Optional
 from abc import ABC, abstractmethod
 from pathlib import Path
-import contextlib
 import time
 import json
 import uuid
+import hashlib
 
 import cbor2
-from pycose.messages import CoseMessage, Sign1Message
+from pycose.messages import Sign1Message
 import pycose.headers
-from pycose.keys.ec2 import EC2Key
-import pycose.keys.curves
 
-# temporary claim header labels, see draft-birkholz-scitt-architecture
-COSE_Headers_Issuer = 391
+from scitt_emulator.create_statement import CWTClaims
+from scitt_emulator.verify_statement import verify_statement
+from scitt_emulator.federation import SCITTFederation
+from scitt_emulator.signals import SCITTSignals, SCITTSignalsFederationCreatedEntry
+
 
 # temporary receipt header labels, see draft-birkholz-scitt-receipts
 COSE_Headers_Service_Id = "service_id"
@@ -27,6 +28,8 @@ COSE_Headers_Issued_At = "issued_at"
 MOST_PERMISSIVE_INSERT_POLICY = "*"
 DEFAULT_INSERT_POLICY = MOST_PERMISSIVE_INSERT_POLICY
 
+# hash algorithm used to content address claims to entryIDs
+DEFAULT_ENTRY_ID_HASH_ALGORITHM = "sha384"
 
 class ClaimInvalidError(Exception):
     pass
@@ -46,8 +49,13 @@ class PolicyResultDecodeError(Exception):
 
 class SCITTServiceEmulator(ABC):
     def __init__(
-        self, service_parameters_path: Path, storage_path: Optional[Path] = None
+        self,
+        signals: SCITTSignals,
+        service_parameters_path: Path,
+        storage_path: Optional[Path] = None,
     ):
+        self.signals = signals
+        self.connect_signals()
         self.storage_path = storage_path
         self.service_parameters_path = service_parameters_path
 
@@ -58,6 +66,17 @@ class SCITTServiceEmulator(ABC):
         if self.service_parameters_path.exists():
             with open(self.service_parameters_path) as f:
                 self.service_parameters = json.load(f)
+
+    def connect_signals(self):
+        self.signal_receiver_submit_claim = self.signals.federation.submit_claim.connect(
+            self.signal_receiver_submit_claim,
+        )
+
+    async def signal_receiver_submit_claim(self, _sender, claim: bytes) -> None:
+        use_lro = self.service_parameters.get("use_lro", False)
+        result = await self.submit_claim(claim, long_running=use_lro)
+        while use_lro and result.get("status", None) == "running":
+            result = await self._finish_operation(result)
 
     @abstractmethod
     def initialize_service(self):
@@ -71,7 +90,7 @@ class SCITTServiceEmulator(ABC):
     def verify_receipt_contents(receipt_contents: list, countersign_tbi: bytes):
         raise NotImplementedError
 
-    def get_operation(self, operation_id: str) -> dict:
+    async def get_operation(self, operation_id: str) -> dict:
         operation_path = self.operations_path / f"{operation_id}.json"
         try:
             with open(operation_path, "r") as f:
@@ -82,7 +101,7 @@ class SCITTServiceEmulator(ABC):
         if operation["status"] == "running":
             # Pretend that the service finishes the operation after
             # the client having checked the operation status once.
-            operation = self._finish_operation(operation)
+            operation = await self._finish_operation(operation)
         return operation
 
     def get_entry(self, entry_id: str) -> dict:
@@ -102,8 +121,14 @@ class SCITTServiceEmulator(ABC):
             raise EntryNotFoundError(f"Entry {entry_id} not found")
         return claim
 
-    def submit_claim(self, claim: bytes, long_running=True) -> dict:
+    async def submit_claim(self, claim: bytes, long_running=True) -> dict:
         insert_policy = self.service_parameters.get("insertPolicy", DEFAULT_INSERT_POLICY)
+
+        try:
+            entry_id = self.get_entry_id(claim)
+            return self.get_entry(entry_id)
+        except EntryNotFoundError:
+            pass
 
         if long_running:
             return self._create_operation(claim)
@@ -112,21 +137,26 @@ class SCITTServiceEmulator(ABC):
                 f"non-* insertPolicy only works with long_running=True: {insert_policy!r}"
             )
         else:
-            return self._create_entry(claim)
+            return await self._create_entry(claim)
 
-    def _create_entry(self, claim: bytes) -> dict:
-        last_entry_path = self.storage_path / "last_entry_id.txt"
-        if last_entry_path.exists():
-            with open(last_entry_path, "r") as f:
-                last_entry_id = int(f.read())
-        else:
-            last_entry_id = 0
+    def public_service_parameters(self) -> bytes:
+        # TODO Only export public portion of cert
+        return json.dumps(self.service_parameters).encode()
 
-        entry_id = str(last_entry_id + 1)
+    def get_entry_id(self, claim: bytes) -> str:
+        entry_id_hash_alg = self.service_parameters.get(
+            "entryIdHashAlgorith",
+            DEFAULT_ENTRY_ID_HASH_ALGORITHM,
+        )
+        entry_id_hash = hashlib.new(entry_id_hash_alg)
+        entry_id_hash.update(claim)
+        entry_id = f"{entry_id_hash_alg}:{entry_id_hash.hexdigest()}"
+        return entry_id
 
-        self._create_receipt(claim, entry_id)
+    async def _create_entry(self, claim: bytes) -> dict:
+        entry_id = self.get_entry_id(claim)
 
-        last_entry_path.write_text(entry_id)
+        receipt = self._create_receipt(claim, entry_id)
 
         claim_path = self.storage_path / f"{entry_id}.cose"
         claim_path.write_bytes(claim)
@@ -134,6 +164,18 @@ class SCITTServiceEmulator(ABC):
         print(f"A COSE signed Claim was written to:  {claim_path}")
     
         entry = {"entryId": entry_id}
+
+        await self.signals.federation.created_entry.send_async(
+            self,
+            created_entry=SCITTSignalsFederationCreatedEntry(
+                tree_alg=self.tree_alg,
+                entry_id=entry_id,
+                receipt=receipt,
+                claim=claim,
+                public_service_parameters=self.public_service_parameters(),
+            )
+        )
+
         return entry
     
     def _create_operation(self, claim: bytes):
@@ -192,7 +234,7 @@ class SCITTServiceEmulator(ABC):
 
         return policy_result
 
-    def _finish_operation(self, operation: dict):
+    async def _finish_operation(self, operation: dict):
         operation_id = operation["operationId"]
         operation_path = self.operations_path / f"{operation_id}.json"
         claim_src_path = self.operations_path / f"{operation_id}.cose"
@@ -209,7 +251,7 @@ class SCITTServiceEmulator(ABC):
             return operation
 
         claim = claim_src_path.read_bytes()
-        entry = self._create_entry(claim)
+        entry = await self._create_entry(claim)
         claim_src_path.unlink()
 
         operation["status"] = "succeeded"
@@ -225,7 +267,7 @@ class SCITTServiceEmulator(ABC):
         # Note: This emulator does not verify the claim signature and does not apply
         # registration policies.
         try:
-            msg = CoseMessage.decode(claim)
+            msg = Sign1Message.decode(claim, tag=True)
         except:
             raise ClaimInvalidError("Claim is not a valid COSE message")
         if not isinstance(msg, Sign1Message):
@@ -236,10 +278,15 @@ class SCITTServiceEmulator(ABC):
             raise ClaimInvalidError(
                 "Claim does not have a content type header parameter"
             )
-        if COSE_Headers_Issuer not in msg.phdr:
-            raise ClaimInvalidError("Claim does not have an issuer header parameter")
-        if not isinstance(msg.phdr[COSE_Headers_Issuer], str):
-            raise ClaimInvalidError("Claim issuer is not a string")
+        if CWTClaims not in msg.phdr:
+            raise ClaimInvalidError("Claim does not have a CWTClaims header parameter")
+
+        try:
+            cwt_cose_key, _pycose_cose_key = verify_statement(msg)
+        except Exception as e:
+            raise ClaimInvalidError("Failed to verify signature on statement") from e
+        if not cwt_cose_key:
+            raise ClaimInvalidError("Failed to verify signature on statement")
 
         # Extract fields of COSE_Sign1 for countersigning
         outer = cbor2.loads(claim)
@@ -270,6 +317,7 @@ class SCITTServiceEmulator(ABC):
         with open(receipt_path, "wb") as f:
             f.write(receipt)
         print(f"Receipt written to {receipt_path}")
+        return receipt
 
     def get_receipt(self, entry_id: str):
         receipt_path = self.storage_path / f"{entry_id}.receipt.cbor"
@@ -302,28 +350,6 @@ class SCITTServiceEmulator(ABC):
         assert tree_alg == self.tree_alg
 
         self.verify_receipt_contents(receipt_contents, countersign_tbi)
-
-
-def create_claim(claim_path: Path, issuer: str, content_type: str, payload: str):
-    # Create COSE_Sign1 structure
-    protected = {
-        pycose.headers.Algorithm: "ES256",
-        pycose.headers.ContentType: content_type,
-        COSE_Headers_Issuer: issuer,
-    }
-    msg = Sign1Message(phdr=protected, payload=payload.encode("utf-8"))
-
-    # Create an ad-hoc key
-    # Note: The emulator does not validate signatures, hence the short-cut.
-    key = EC2Key.generate_key(pycose.keys.curves.P256)
-
-    # Sign
-    msg.key = key
-    claim = msg.encode(tag=True)
-
-    with open(claim_path, "wb") as f:
-        f.write(claim)
-    print(f"A COSE signed Claim was written to:  {claim_path}")
 
 
 def create_countersign_to_be_included(

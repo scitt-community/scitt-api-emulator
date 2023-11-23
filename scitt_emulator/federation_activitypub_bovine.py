@@ -1,0 +1,486 @@
+import os
+import sys
+import json
+import enum
+import types
+import pprint
+import atexit
+import base64
+import socket
+import inspect
+import tomllib
+import logging
+import asyncio
+import pathlib
+import tempfile
+import functools
+import traceback
+import contextlib
+import subprocess
+import dataclasses
+import urllib.parse
+from pathlib import Path
+from typing import Optional
+
+import tomli_w
+import bovine
+import aiohttp
+from bovine_store import BovineAdminStore
+from bovine_herd import BovineHerd
+from bovine_pubsub import BovinePubSub
+from bovine.clients import lookup_uri_with_webfinger
+from bovine.crypto import generate_ed25519_private_key, private_key_to_did_key
+from mechanical_bull.handlers import (
+    load_handlers,
+)
+
+from scitt_emulator.scitt import SCITTServiceEmulator
+from scitt_emulator.federation import SCITTFederation
+from scitt_emulator.tree_algs import TREE_ALGS
+from scitt_emulator.signals import SCITTSignals, SCITTSignalsFederationCreatedEntry
+
+logger = logging.getLogger(__name__)
+
+
+class SCITTFederationActivityPubBovine(SCITTFederation):
+    def __init__(self, app, config_path):
+        super().__init__(app, config_path)
+
+        self.handle_name = self.config["handle_name"]
+        self.fqdn = self.config.get("fqdn", None)
+        # This is the federation middleware workspace, not the same as the
+        # tree_alg class's workspace
+        self.workspace = Path(self.config["workspace"]).expanduser()
+
+        self.bovine_db_url = self.config.get(
+            "bovine_db_url", os.environ.get("BOVINE_DB_URL", None)
+        )
+        if self.bovine_db_url and self.bovine_db_url.startswith("~"):
+            self.bovine_db_url = "sqlite://" + str(Path(self.bovine_db_url).expanduser())
+        # TODO Pass this as variable
+        if not "BOVINE_DB_URL" in os.environ and self.bovine_db_url:
+            os.environ["BOVINE_DB_URL"] = self.bovine_db_url
+            logging.debug(f"Set BOVINE_DB_URL to {self.bovine_db_url}")
+
+        BovinePubSub(app)
+        BovineHerd(app, db_url=self.bovine_db_url)
+
+        app.while_serving(self.initialize_service)
+
+    async def make_client_session(self):
+        return aiohttp.ClientSession(trust_env=True)
+
+    async def initialize_service(self):
+        # TODO Better domain / fqdn building
+        if self.fqdn:
+            self.domain = self.fqdn
+            # TODO netloc remove scheme (http, https) before set to domain
+            # Use schem to build endpoint_path
+        else:
+            self.domain = f'http://localhost:{self.app.config["port"]}'
+
+        config_toml_path = pathlib.Path(self.workspace, "config.toml")
+        if not config_toml_path.exists():
+            logger.info("Actor client config does not exist, creating...")
+            config_toml_obj = {
+                self.handle_name: {
+                    "secret": generate_ed25519_private_key(),
+                    "host": self.domain,
+                    "domain": self.domain,
+                    "handlers": {
+                        "mechanical_bull.actions.accept_follow_request": True,
+                    },
+                },
+            }
+            config_toml_path.write_text(tomli_w.dumps(config_toml_obj))
+            logger.info("Actor client config.toml created")
+        else:
+            config_toml_obj = tomllib.loads(config_toml_path.read_text())
+
+        # Enable handler() function in this file for this actor
+        config_toml_obj[self.handle_name]["handlers"][
+            inspect.getmodule(sys.modules[__name__]).__spec__.name
+        ] = {
+            "signals": self.app.signals,
+            "following": self.config.get("following", {}),
+        }
+
+        # Extract public key from private key in config file
+        private_key = config_toml_obj[self.handle_name]["secret"]
+        did_key = bovine.crypto.private_key_to_did_key(private_key)
+
+        bovine_store = self.app.config["bovine_store"]
+        _account, actor_url = await bovine_store.get_account_url_for_identity(did_key)
+        if actor_url:
+            logger.info("Existing actor found. actor_url is %s", actor_url)
+        else:
+            logger.info("Actor not found, creating in database...")
+            bovine_store = BovineAdminStore(domain=self.domain)
+            bovine_name = await bovine_store.register(
+                self.handle_name,
+            )
+            logger.info("Created actor with database name %s", bovine_name)
+            await bovine_store.add_identity_string_to_actor(
+                bovine_name,
+                "key0",
+                did_key,
+            )
+            _account, actor_url = await self.app.config[
+                "bovine_store"
+            ].get_account_url_for_identity(did_key)
+            logger.info("Actor key added in database. actor_url is %s", actor_url)
+
+        # async with aiohttp.ClientSession(trust_env=True) as client_session:
+        async with contextlib.AsyncExitStack() as async_exit_stack:
+            # await mechanical_bull_loop(config_toml_obj)
+            self.app.config["bovine_async_exit_stack"] = async_exit_stack
+            self.app.add_background_task(
+                mechanical_bull_loop,
+                config_toml_obj,
+                add_background_task=self.app.add_background_task,
+            )
+            yield
+
+
+# Begin ActivityPub Actor automation handler code
+class HandlerAPIVersion(enum.Enum):
+    # unstable API version used for development between versions
+    unstable = enum.auto()
+    v0_2_5 = enum.auto()
+
+
+class HandlerEvent(enum.Enum):
+    DATA = enum.auto()
+    OPENED = enum.auto()
+    CLOSED = enum.auto()
+
+
+async def handle(
+    client: bovine.BovineClient,
+    data: dict,
+    # config.toml arguments
+    signals: SCITTSignals = None,
+    following: dict[str, dict] = None,
+    raise_on_follow_failure: bool = False,
+    # handler arguments
+    handler_event: HandlerEvent = None,
+    handler_api_version: HandlerAPIVersion = HandlerAPIVersion.unstable,
+):
+    try:
+        logger.info(f"{__file__}:handle(handler_event={handler_event})")
+        print(f"{__file__}:handle(handler_event={handler_event})")
+        match handler_event:
+            case HandlerEvent.OPENED:
+                # Listen for events from SCITT
+                # TODO Do this without using a client, server side
+                async def federate_created_entries_pass_client(
+                    sender: SCITTServiceEmulator,
+                    created_entry: SCITTSignalsFederationCreatedEntry = None,
+                ):
+                    nonlocal client
+                    nonlocal signals
+                    await federate_created_entries(client, sender, created_entry)
+
+                client.federate_created_entries = types.MethodType(
+                    signals.federation.created_entry.connect(
+                        federate_created_entries_pass_client
+                    ),
+                    client,
+                )
+                # Preform ActivityPub related init
+                if following:
+                    try:
+                        async with asyncio.TaskGroup() as tg:
+                            for key, value in following.items():
+                                logger.info("Following... %r", value)
+                                tg.create_task(init_follow(client, **value))
+                    except (ExceptionGroup, BaseExceptionGroup) as error:
+                        if raise_on_follow_failure:
+                            raise
+                        else:
+                            logger.error("Failures while following: %r", error)
+            case HandlerEvent.CLOSED:
+                return
+            case HandlerEvent.DATA:
+                print(
+                    f"Got new data in ActivityPub inbox: {pprint.pformat(data)}"
+                )
+                logger.info(
+                    "Got new data in ActivityPub inbox: %s", pprint.pformat(data)
+                )
+                if data.get("type") != "Create":
+                    return
+
+                obj = data.get("object")
+                if not isinstance(obj, dict):
+                    return
+
+                # Send federated claim / receipt to SCITT
+                content_str = obj.get("content")
+                content = json.loads(content_str)
+                if not isinstance(content, dict):
+                    return
+                logger.info("Federation received new receipt: %r", content)
+
+                treeAlgorithm = content["treeAlgorithm"]
+                _entry_id = content["entry_id"]
+                claim = base64.b64decode(content["claim"].encode())
+                receipt = base64.b64decode(content["receipt"].encode())
+                service_parameters = base64.b64decode(
+                    content["service_parameters"].encode()
+                )
+
+                with tempfile.TemporaryDirectory() as tempdir:
+                    receipt_path = Path(tempdir, "receipt")
+                    receipt_path.write_bytes(receipt)
+                    cose_path = Path(tempdir, "claim")
+                    cose_path.write_bytes(claim)
+                    service_parameters_path = Path(tempdir, "service_parameters")
+                    service_parameters_path.write_bytes(service_parameters)
+
+                    clazz = TREE_ALGS[treeAlgorithm]
+                    service = clazz(
+                        signals=SCITTSignals(),
+                        service_parameters_path=service_parameters_path,
+                    )
+                    service.verify_receipt(cose_path, receipt_path)
+
+                    logger.info("Receipt verified")
+
+                    # Send signal to submit federated claim
+                    # TODO Announce that this entry ID was created via
+                    # federation to avoid an infinate loop
+                    await signals.federation.submit_claim.send_async(
+                        client, claim=claim
+                    )
+    except Exception as ex:
+        print(ex)
+        import traceback
+        traceback.print_exc()
+        logger.error(ex)
+        logger.exception(ex)
+        logger.error(json.dumps(data))
+
+
+class WebFingerLookupNotFoundError(Exception):
+    pass
+
+
+async def _init_follow(client, actor_id: str, domain: str = None, retry: int = 5):
+    url, _ = await lookup_uri_with_webfinger(
+        client.session, f"acct:{actor_id}", domain=domain
+    )
+    if not url:
+        raise WebFingerLookupNotFoundError(f"actor_id: {actor_id}, domain: {domain}")
+    activity = client.activity_factory.follow(
+        url,
+    ).build()
+    logger.info("Sending follow to %s: %r", actor_id, activity)
+    await client.send_to_outbox(activity)
+
+
+async def init_follow(client, retry: int = 5, **kwargs):
+    for i in range(0, retry):
+        try:
+            return await _init_follow(client, retry=retry, **kwargs)
+        except Exception as error:
+            logger.error(repr(error))
+            await asyncio.sleep(2**i)
+
+
+async def federate_created_entries(
+    client: bovine.BovineClient,
+    sender: SCITTServiceEmulator,
+    created_entry: SCITTSignalsFederationCreatedEntry = None,
+):
+    print()
+    print()
+    print()
+    print(client, sender, created_entry)
+    print()
+    print()
+    print()
+    try:
+        logger.info("federate_created_entry() created_entry: %r", created_entry)
+        note = (
+            client.object_factory.note(
+                content=json.dumps(
+                    {
+                        "treeAlgorithm": created_entry.tree_alg,
+                        "service_parameters": base64.b64encode(
+                            created_entry.public_service_parameters
+                        ).decode(),
+                        "entry_id": created_entry.entry_id,
+                        "receipt": base64.b64encode(created_entry.receipt).decode(),
+                        "claim": base64.b64encode(created_entry.claim).decode(),
+                    }
+                )
+            )
+            .as_public()
+            .build()
+        )
+        activity = client.activity_factory.create(note).build()
+        logger.info("Sending... %r", activity)
+        await client.send_to_outbox(activity)
+
+        # DEBUG NOTE Dumping outbox
+        print("client:", client)
+        outbox = client.outbox()
+        print("outbox:", outbox)
+        count_messages = 0
+        async for message in outbox:
+            count_messages += 1
+            print(f"Message {count_messages} in outbox:", message)
+        print(f"End of messages in outbox, total: {count_messages}")
+    except:
+        logger.error(traceback.format_exc())
+
+
+async def call_handler_compat(handler, *args, **kwargs):
+    """Helper function to call a handler across versions of the handler calling
+    convention.
+    """
+    # Inspect handler to determine accepted arguments and for logging purposes
+    handler_module = inspect.getmodule(handler)
+    handler_name = getattr(
+        handler, "__name__", getattr(handler, "__qualname__", repr(handler))
+    )
+    parameters = inspect.signature(handler).parameters
+
+    inspect_args = {
+        name: parameter
+        for name, parameter in parameters.items()
+        if parameter.default is inspect.Parameter.empty
+    }
+    inspect_kwargs = {
+        name: parameter
+        for name, parameter in parameters.items()
+        if parameter.default is not inspect.Parameter.empty
+    }
+
+    # Determine version of handler API in use. Assume lowest version if not
+    handler_api_version = HandlerAPIVersion.unstable
+    handler_api_version_parameter = inspect_kwargs.get("handler_api_version", None)
+    if "handler_api_version" in kwargs:
+        handler_api_version = kwargs["handler_api_version"]
+    elif "handler_event" not in inspect_kwargs:
+        handler_api_version = HandlerAPIVersion.v0_2_5
+    elif (
+        handler_api_version_parameter.annotation is HandlerAPIVersion
+        and handler_api_version_parameter.default is not inspect.Parameter.empty
+    ):
+        handler_api_version = handler_api_version_parameter.default
+
+    # Pass version of handler API called with if not set explictly
+    if "handler_api_version" not in kwargs:
+        kwargs["handler_api_version"] = handler_api_version
+
+    # Handle adaptations across versions
+    if (
+        handler_api_version == HandlerAPIVersion.v0_2_5
+        and args[list(inspect_args.keys()).index("data")] is None
+    ):
+        return
+
+    # Remove unknown arguments which would break calls to older handlers
+    if len(args) != len(inspect_args):
+        logger.info(
+            "%s:%s does not support arguments: %s",
+            handler_module,
+            handler_name,
+            json.dumps(list(inspect_args.keys())[len(args) :]),
+        )
+
+    args = args[: len(inspect_args)]
+
+    remove_kwargs = [keyword for keyword in kwargs if keyword not in inspect_kwargs]
+
+    if remove_kwargs:
+        logger.info(
+            "%s:%s does not support keyword arguments: %s",
+            handler_module,
+            handler_name,
+            json.dumps(remove_kwargs),
+        )
+
+    for keyword in remove_kwargs:
+        del kwargs[keyword]
+
+    # Call handler and return result
+    return await handler(*args, **kwargs)
+
+
+async def handle_connection(client: bovine.BovineClient, handlers: list):
+    print("handle_connection")
+    event_source = await client.event_source()
+    print(event_source)
+    logger.info("Connected")
+    for handler in handlers:
+        await call_handler_compat(
+            handler,
+            client,
+            None,
+            handler_event=HandlerEvent.OPENED,
+        )
+    async for event in event_source:
+        if not event:
+            return
+        if event and event.data:
+            data = json.loads(event.data)
+
+            for handler in handlers:
+                await call_handler_compat(
+                    handler,
+                    client,
+                    data,
+                    handler_event=HandlerEvent.DATA,
+                )
+    for handler in handlers:
+        await call_handler_compat(
+            handler,
+            client,
+            None,
+            handler_event=HandlerEvent.CLOSED,
+        )
+
+
+async def handle_connection_with_reconnect(
+    client: bovine.BovineClient,
+    handlers: list,
+    client_name: str = "BovineClient",
+    wait_time: int = 10,
+):
+    while True:
+        await handle_connection(client, handlers)
+        logger.info(
+            "Disconnected from server for %s, reconnecting in %d seconds",
+            client_name,
+            wait_time,
+        )
+        await asyncio.sleep(wait_time)
+
+
+async def loop(client_name, client_config, handlers):
+    i = 1
+    while True:
+        try:
+            async with bovine.BovineClient(**client_config) as client:
+                await handle_connection_with_reconnect(
+                    client, handlers, client_name=client_name
+                )
+        except Exception as e:
+            logger.exception("Something went wrong for %s", client_name)
+            logger.exception(e)
+            await asyncio.sleep(2**i)
+            i += 1
+
+
+# Run client handlers using call_compat
+async def mechanical_bull_loop(config, *, add_background_task=asyncio.create_task):
+    try:
+        for client_name, client_config in config.items():
+            if isinstance(client_config, dict):
+                handlers = load_handlers(client_config["handlers"])
+                add_background_task(loop, client_name, client_config, handlers)
+    except Exception as e:
+        logger.exception(e)

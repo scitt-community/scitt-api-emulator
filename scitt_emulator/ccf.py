@@ -18,15 +18,20 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 
 from scitt_emulator.scitt import SCITTServiceEmulator
+from scitt_emulator.signals import SCITTSignals
+from scitt_emulator.federation import SCITTFederation
 
 
 class CCFSCITTServiceEmulator(SCITTServiceEmulator):
     tree_alg = "CCF"
 
     def __init__(
-        self, service_parameters_path: Path, storage_path: Optional[Path] = None
+        self,
+        signals: SCITTSignals,
+        service_parameters_path: Path,
+        storage_path: Optional[Path] = None,
     ):
-        super().__init__(service_parameters_path, storage_path)
+        super().__init__(signals, service_parameters_path, storage_path)
         if storage_path is not None:
             self._service_private_key_path = (
                 self.storage_path / "service_private_key.pem"

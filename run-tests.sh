@@ -10,7 +10,7 @@ if [ ! -f "venv/bin/activate" ]; then
     . ./venv/bin/activate
     pip install -q -U pip setuptools wheel
     pip install -q -r dev-requirements.txt
-    pip install -q -e .[oidc]
+    pip install -q -e .[oidc,federation-activitypub-bovine]
 else
     . ./venv/bin/activate 
 fi

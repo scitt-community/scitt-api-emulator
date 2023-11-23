@@ -2,9 +2,7 @@
 # Licensed under the MIT License.
 import jwt
 import json
-import jwcrypto.jwk
 import jsonschema
-from flask import jsonify
 from werkzeug.wrappers import Request
 from scitt_emulator.client import HttpClient
 
@@ -12,6 +10,7 @@ from scitt_emulator.client import HttpClient
 class OIDCAuthMiddleware:
     def __init__(self, app, config_path):
         self.app = app
+        self.asgi_app = app.asgi_app
         self.config = {}
         if config_path and config_path.exists():
             self.config = json.loads(config_path.read_text())
@@ -26,12 +25,13 @@ class OIDCAuthMiddleware:
             ).json()
             self.jwks_clients[issuer] = jwt.PyJWKClient(self.oidc_configs[issuer]["jwks_uri"])
 
-    def __call__(self, environ, start_response):
-        request = Request(environ)
-        claims = self.validate_token(request.headers["Authorization"].replace("Bearer ", ""))
+    async def __call__(self, scope, receive, send):
+        headers = dict(scope.get("headers", []))
+        token = headers.get(b"authorization", "").replace(b"Bearer ", b"").decode()
+        claims = self.validate_token(token)
         if "claim_schema" in self.config and claims["iss"] in self.config["claim_schema"]:
             jsonschema.validate(claims, schema=self.config["claim_schema"][claims["iss"]])
-        return self.app(environ, start_response)
+        return await self.asgi_app(scope, receive, send)
 
     def validate_token(self, token):
         validation_error = Exception(f"Failed to validate against all issuers: {self.jwks_clients.keys()!s}")
