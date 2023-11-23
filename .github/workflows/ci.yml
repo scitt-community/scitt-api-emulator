@@ -11,36 +11,38 @@ on:
   workflow_dispatch:
 
 jobs:
-  ci-venv:
-    name: CI (venv)
+  ci:
+    name: "CI ${{ matrix.python-version }} (conda: ${{ matrix.conda }})"
     runs-on: ubuntu-latest
     strategy:
       matrix:
+        conda: [true, false]
         python-version: ["3.11"]
-    steps:
-    - uses: actions/checkout@v3
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ matrix.python-version }}
-    - run: ./run-tests.sh
-  
-  ci-conda:
-    name: CI (conda)
-    runs-on: ubuntu-latest
     defaults:
       run:
         # https://github.com/conda-incubator/setup-miniconda#use-a-default-shell
         shell: bash -el {0}
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     - uses: conda-incubator/setup-miniconda@v2
+      if: ${{ matrix.conda == true }}
       with:
         activate-environment: scitt
         environment-file: environment.yml
-    - run: |
+        python-version: ${{ matrix.python-version }}
+    - name: Run tests with conda
+      if: ${{ matrix.conda == true }}
+      run: |
         python -m pip install -e .
         python -m pytest
+    - name: Set up Python ${{ matrix.python-version }}
+      if: ${{ matrix.conda == false }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Run tests with venv
+      if: ${{ matrix.conda == false }}
+      run: ./run-tests.sh
 
   ci-cd-build-and-push-image-container:
     name: CI/CD (container)
