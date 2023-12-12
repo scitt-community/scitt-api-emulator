@@ -37,6 +37,7 @@ runs:
         # TODO --subject "${SUBJECT}"
         scitt-emulator client create-claim --issuer "${ISSUER}" --content-type "${PAYLOAD_CONTENT_TYPE}" --payload "${PAYLOAD}" --out statement.cbor
     - name: Submit statement
+      shell: bash
       id: submit-statement
       env:
         SCITT_URL: ${{ inputs.scitt-url }}
