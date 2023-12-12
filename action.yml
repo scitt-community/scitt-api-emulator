@@ -1,0 +1,45 @@
+name: 'scitt-client'
+description: 'Create and submit statement to a SCITT instance'
+inputs:
+  issuer:
+    description: 'Issuer of statement'
+    required: true
+  subject:
+    description: 'Subject of statement'
+    required: true
+  payload:
+    description: 'Payload for statement'
+    required: true
+  payload-content-type:
+    description: 'Statement payload content-type'
+    required: false
+    default: 'application/json'
+  private-key-pem:
+    description: 'Private key pem bytes'
+    required: true
+  scitt-url:
+    description: 'URL of scitt instance'
+    required: true
+outputs:
+  entry-id:
+    description: "Entry ID of submitted statement"
+    value: ${{ steps.submit-statement.outputs.entry-id }}
+runs:
+  using: "composite"
+  steps:
+    - name: Create statement
+      shell: bash
+      env:
+        ISSUER: ${{ inputs.issuer }}
+        PAYLOAD: ${{ inputs.payload }}
+        PAYLOAD_CONTENT_TYPE: ${{ inputs.payload-content-type }}
+      run: |
+        # TODO --subject "${SUBJECT}"
+        scitt-emulator client create-claim --issuer "${ISSUER}" --content-type "${PAYLOAD_CONTENT_TYPE}" --payload "${PAYLOAD}" --out statement.cbor
+    - name: Submit statement
+      id: submit-statement
+      env:
+        SCITT_URL: ${{ inputs.scitt-url }}
+      run: |
+        scitt-emulator client submit-claim --url "${SCITT_URL}" --claim statement.cbor --out statement.receipt.cbor 2>&1 | tee >(grep Entry\ ID: | awk '{print $NF}' > entry_id.txt)
+        echo "entry-id=$(cat entry_id.txt)" >> "${GITHUB_OUTPUT}"
