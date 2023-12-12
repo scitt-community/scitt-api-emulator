@@ -28,7 +28,7 @@ runs:
   using: "composite"
   steps:
     - name: Create statement
-      shell: bash
+      shell: bash -xeuo pipefail {0}
       env:
         ISSUER: ${{ inputs.issuer }}
         PAYLOAD: ${{ inputs.payload }}
@@ -37,7 +37,7 @@ runs:
       run: |
         scitt-emulator client create-claim --issuer "${ISSUER}" --subject "${SUBJECT}" --content-type "${PAYLOAD_CONTENT_TYPE}" --payload "${PAYLOAD}" --out statement.cbor --private-key-pem "${PRIVATE_KEY_PEM}"
     - name: Submit statement
-      shell: bash
+      shell: bash -xeuo pipefail {0}
       id: submit-statement
       env:
         SCITT_URL: ${{ inputs.scitt-url }}
