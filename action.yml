@@ -32,9 +32,10 @@ runs:
       env:
         ISSUER: ${{ inputs.issuer }}
         PAYLOAD: ${{ inputs.payload }}
+        PRIVATE_KEY_PEM: ${{ inputs.private-key-pem }}
         PAYLOAD_CONTENT_TYPE: ${{ inputs.payload-content-type }}
       run: |
-        scitt-emulator client create-claim --issuer "${ISSUER}" --subject "${SUBJECT}" --content-type "${PAYLOAD_CONTENT_TYPE}" --payload "${PAYLOAD}" --out statement.cbor
+        scitt-emulator client create-claim --issuer "${ISSUER}" --subject "${SUBJECT}" --content-type "${PAYLOAD_CONTENT_TYPE}" --payload "${PAYLOAD}" --out statement.cbor --private-key-pem "${PRIVATE_KEY_PEM}"
     - name: Submit statement
       shell: bash
       id: submit-statement
