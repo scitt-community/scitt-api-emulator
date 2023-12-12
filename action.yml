@@ -34,8 +34,7 @@ runs:
         PAYLOAD: ${{ inputs.payload }}
         PAYLOAD_CONTENT_TYPE: ${{ inputs.payload-content-type }}
       run: |
-        # TODO --subject "${SUBJECT}"
-        scitt-emulator client create-claim --issuer "${ISSUER}" --content-type "${PAYLOAD_CONTENT_TYPE}" --payload "${PAYLOAD}" --out statement.cbor
+        scitt-emulator client create-claim --issuer "${ISSUER}" --subject "${SUBJECT}" --content-type "${PAYLOAD_CONTENT_TYPE}" --payload "${PAYLOAD}" --out statement.cbor
     - name: Submit statement
       shell: bash
       id: submit-statement
