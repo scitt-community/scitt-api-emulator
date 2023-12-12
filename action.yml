@@ -32,6 +32,7 @@ runs:
       env:
         ISSUER: ${{ inputs.issuer }}
         PAYLOAD: ${{ inputs.payload }}
+        SUBJECT: ${{ inputs.subject }}
         PRIVATE_KEY_PEM: ${{ inputs.private-key-pem }}
         PAYLOAD_CONTENT_TYPE: ${{ inputs.payload-content-type }}
       run: |
