@@ -93,6 +93,7 @@ from jsonschema import validate, ValidationError
 
 from scitt_emulator.scitt import ClaimInvalidError, CWTClaims
 from scitt_emulator.verify_statement import verify_statement
+from scitt_emulator.key_helpers import verification_key_to_object
 
 
 def main():
@@ -107,15 +108,21 @@ def main():
             f"Claim content type does not start with application/json: {msg.phdr[pycose.headers.ContentType]!r}"
         )
 
-    cwt_cose_key, _pycose_cose_key = verify_statement(msg)
+    verification_key = verify_statement(msg)
     unittest.TestCase().assertTrue(
-        cwt_cose_key,
+        verification_key,
         "Failed to verify signature on statement",
     )
 
-    cwt_protected = cwt.decode(msg.phdr[CWTClaims], cwt_cose_key)
+    cwt_protected = cwt.decode(msg.phdr[CWTClaims], verification_key.cwt)
     issuer = cwt_protected[1]
     subject = cwt_protected[2]
+
+    issuer_key_as_object = verification_key_to_object(verification_key)
+    unittest.TestCase().assertTrue(
+        issuer_key_as_object,
+        "Failed to convert issuer key to JSON schema verifiable object",
+    )
 
     SCHEMA = json.loads(pathlib.Path(os.environ["SCHEMA_PATH"]).read_text())
 
@@ -124,6 +131,7 @@ def main():
             instance={
                 "$schema": "https://schema.example.com/scitt-policy-engine-jsonschema.schema.json",
                 "issuer": issuer,
+                "issuer_key": issuer_key_as_object,
                 "subject": subject,
                 "claim": json.loads(msg.payload.decode()),
             },

@@ -13,20 +13,22 @@ import pycose.keys.ec2
 import jwcrypto.jwk
 
 from scitt_emulator.did_helpers import did_web_to_url
+from scitt_emulator.key_helper_dataclasses import VerificationKey
+
+
+CONTENT_TYPE = "application/jwk+json"
 
 
 def key_loader_format_url_referencing_oidc_issuer(
     unverified_issuer: str,
 ) -> List[Tuple[cwt.COSEKey, pycose.keys.ec2.EC2Key]]:
-    jwk_keys = []
-    cwt_cose_keys = []
-    pycose_cose_keys = []
+    keys = []
 
     if unverified_issuer.startswith("did:web:"):
         unverified_issuer = did_web_to_url(unverified_issuer)
 
     if "://" not in unverified_issuer or unverified_issuer.startswith("file://"):
-        return pycose_cose_keys
+        return keys
 
     # TODO Logging for URLErrors
     # Check if OIDC issuer
@@ -44,18 +46,40 @@ def key_loader_format_url_referencing_oidc_issuer(
                         jwks = json.loads(response.read())
                         for jwk_key_as_dict in jwks["keys"]:
                             jwk_key_as_string = json.dumps(jwk_key_as_dict)
-                            jwk_keys.append(
-                                jwcrypto.jwk.JWK.from_json(jwk_key_as_string),
+                            jwk_key = jwcrypto.jwk.JWK.from_json(jwk_key_as_string)
+                            keys.append(
+                                VerificationKey(
+                                    transforms=[jwk_key],
+                                    original=jwk_key,
+                                    original_content_type=CONTENT_TYPE,
+                                    original_bytes=jwk_key_as_string.encode("utf-8"),
+                                    original_bytes_encoding="utf-8",
+                                    usable=False,
+                                    cwt=None,
+                                    cose=None,
+                                )
                             )
 
-    for jwk_key in jwk_keys:
-        cwt_cose_key = cwt.COSEKey.from_pem(
-            jwk_key.export_to_pem(),
-            kid=jwk_key.thumbprint(),
-        )
-        cwt_cose_keys.append(cwt_cose_key)
-        cwt_ec2_key_as_dict = cwt_cose_key.to_dict()
-        pycose_cose_key = pycose.keys.ec2.EC2Key.from_dict(cwt_ec2_key_as_dict)
-        pycose_cose_keys.append((cwt_cose_key, pycose_cose_key))
+    return keys
 
-    return pycose_cose_keys
+
+def transform_key_instance_jwcrypto_jwk_to_cwt_cose(
+    key: jwcrypto.jwk.JWK,
+) -> cwt.COSEKey:
+    if not isinstance(key, jwcrypto.jwk.JWK):
+        raise TypeError(key)
+    return cwt.COSEKey.from_pem(
+        key.export_to_pem(),
+        kid=key.thumbprint(),
+    )
+
+
+def to_object_oidc_issuer(verification_key: VerificationKey) -> dict:
+    if verification_key.original_content_type != CONTENT_TYPE:
+        return
+
+    return {
+        **verification_key.original.export_public(as_dict=True),
+        "use": "sig",
+        "kid": verification_key.original.thumbprint(),
+    }

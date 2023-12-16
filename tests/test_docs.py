@@ -263,7 +263,8 @@ def test_docs_registration_policies(tmp_path):
             check_error = error
         assert check_error
         assert "error" in check_error.operation
-        assert check_error.operation["error"] == claim_denied_error_blocked
+        if check_error.operation["error"] != claim_denied_error_blocked:
+            raise check_error
         assert not os.path.exists(receipt_path)
         assert not os.path.exists(entry_id_path)
 

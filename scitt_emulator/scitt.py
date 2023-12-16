@@ -237,10 +237,10 @@ class SCITTServiceEmulator(ABC):
             raise ClaimInvalidError("Claim does not have a CWTClaims header parameter")
 
         try:
-            cwt_cose_key, _pycose_cose_key = verify_statement(msg)
+            verification_key = verify_statement(msg)
         except Exception as e:
             raise ClaimInvalidError("Failed to verify signature on statement") from e
-        if not cwt_cose_key:
+        if not verification_key:
             raise ClaimInvalidError("Failed to verify signature on statement")
 
         # Extract fields of COSE_Sign1 for countersigning

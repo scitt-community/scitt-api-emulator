@@ -19,17 +19,13 @@ from scitt_emulator.did_helpers import did_web_to_url
 def key_loader_format_url_referencing_ssh_authorized_keys(
     unverified_issuer: str,
 ) -> List[Tuple[cwt.COSEKey, pycose.keys.ec2.EC2Key]]:
-    jwk_keys = []
-    cwt_cose_keys = []
-    pycose_cose_keys = []
-
-    cryptography_ssh_keys = []
+    keys = []
 
     if unverified_issuer.startswith("did:web:"):
         unverified_issuer = did_web_to_url(unverified_issuer)
 
     if "://" not in unverified_issuer or unverified_issuer.startswith("file://"):
-        return pycose_cose_keys
+        return keys
 
     # Try loading ssh keys. Example: https://github.com/username.keys
     with contextlib.suppress(urllib.request.URLError):
@@ -38,28 +34,18 @@ def key_loader_format_url_referencing_ssh_authorized_keys(
                 with contextlib.suppress(
                     (ValueError, cryptography.exceptions.UnsupportedAlgorithm)
                 ):
-                    cryptography_ssh_keys.append(
-                        serialization.load_ssh_public_key(line)
+                    key = serialization.load_ssh_public_key(line)
+                    keys.append(
+                        VerificationKey(
+                            transforms=[key],
+                            original=key,
+                            original_content_type=CONTENT_TYPE,
+                            original_bytes=line.encode("utf-8"),
+                            original_bytes_encoding="utf-8",
+                            usable=False,
+                            cwt=None,
+                            cose=None,
+                        )
                     )
 
-    for cryptography_ssh_key in cryptography_ssh_keys:
-        jwk_keys.append(
-            jwcrypto.jwk.JWK.from_pem(
-                cryptography_ssh_key.public_bytes(
-                    encoding=serialization.Encoding.PEM,
-                    format=serialization.PublicFormat.SubjectPublicKeyInfo,
-                )
-            )
-        )
-
-    for jwk_key in jwk_keys:
-        cwt_cose_key = cwt.COSEKey.from_pem(
-            jwk_key.export_to_pem(),
-            kid=jwk_key.thumbprint(),
-        )
-        cwt_cose_keys.append(cwt_cose_key)
-        cwt_ec2_key_as_dict = cwt_cose_key.to_dict()
-        pycose_cose_key = pycose.keys.ec2.EC2Key.from_dict(cwt_ec2_key_as_dict)
-        pycose_cose_keys.append((cwt_cose_key, pycose_cose_key))
-
-    return pycose_cose_keys
+    return keys

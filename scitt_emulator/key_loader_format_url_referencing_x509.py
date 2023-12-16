@@ -14,22 +14,22 @@ from cryptography.hazmat.primitives import serialization
 import jwcrypto.jwk
 
 from scitt_emulator.did_helpers import did_web_to_url
+from scitt_emulator.key_helper_dataclasses import VerificationKey
+
+
+CONTENT_TYPE = "application/pkix-cert"
 
 
 def key_loader_format_url_referencing_x509(
     unverified_issuer: str,
 ) -> List[Tuple[cwt.COSEKey, pycose.keys.ec2.EC2Key]]:
-    jwk_keys = []
-    cwt_cose_keys = []
-    pycose_cose_keys = []
-
-    cryptography_ssh_keys = []
+    keys = []
 
     if unverified_issuer.startswith("did:web:"):
         unverified_issuer = did_web_to_url(unverified_issuer)
 
     if "://" not in unverified_issuer or unverified_issuer.startswith("file://"):
-        return pycose_cose_keys
+        return keys
 
     with contextlib.suppress(urllib.request.URLError):
         with urllib.request.urlopen(unverified_issuer) as response:
@@ -40,26 +40,28 @@ def key_loader_format_url_referencing_x509(
                 for certificate in cryptography.x509.load_pem_x509_certificates(
                     contents
                 ):
-                    cryptography_ssh_keys.append(certificate.public_key())
+                    key = certificate.public_key()
+                    keys.append(
+                        VerificationKey(
+                            transforms=[key],
+                            original=key,
+                            original_content_type=CONTENT_TYPE,
+                            original_bytes=contents,
+                            original_bytes_encoding="utf-8",
+                            usable=False,
+                            cwt=None,
+                            cose=None,
+                        )
+                    )
 
-    for cryptography_ssh_key in cryptography_ssh_keys:
-        jwk_keys.append(
-            jwcrypto.jwk.JWK.from_pem(
-                cryptography_ssh_key.public_bytes(
-                    encoding=serialization.Encoding.PEM,
-                    format=serialization.PublicFormat.SubjectPublicKeyInfo,
-                )
-            )
-        )
+    return keys
 
-    for jwk_key in jwk_keys:
-        cwt_cose_key = cwt.COSEKey.from_pem(
-            jwk_key.export_to_pem(),
-            kid=jwk_key.thumbprint(),
-        )
-        cwt_cose_keys.append(cwt_cose_key)
-        cwt_ec2_key_as_dict = cwt_cose_key.to_dict()
-        pycose_cose_key = pycose.keys.ec2.EC2Key.from_dict(cwt_ec2_key_as_dict)
-        pycose_cose_keys.append((cwt_cose_key, pycose_cose_key))
 
-    return pycose_cose_keys
+def to_object_x509(verification_key: VerificationKey) -> dict:
+    if verification_key.original_content_type != CONTENT_TYPE:
+        return
+
+    # TODO to dict
+    verification_key.original
+
+    return {}
