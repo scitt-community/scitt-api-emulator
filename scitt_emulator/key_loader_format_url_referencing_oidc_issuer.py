@@ -79,7 +79,10 @@ def to_object_oidc_issuer(verification_key: VerificationKey) -> dict:
         return
 
     return {
-        **verification_key.original.export_public(as_dict=True),
-        "use": "sig",
-        "kid": verification_key.original.thumbprint(),
+        "content_type": verification_key.original_content_type,
+        "key": {
+            **verification_key.original.export_public(as_dict=True),
+            "use": "sig",
+            "kid": verification_key.original.thumbprint(),
+        },
     }

@@ -211,7 +211,7 @@ def create_flask_app_oidc_server(config):
             io.BytesIO(cert_pem),
             mimetype="text/plain",
         )
-        # TODO Re-enable
+        # TODO Re-enable ssh authorized_keys
         return send_file(
             io.BytesIO(
                 serialization.load_pem_public_key(
@@ -223,6 +223,9 @@ def create_flask_app_oidc_server(config):
             ),
             mimetype="text/plain",
         )
+
+    # TODO Re-enable oidc/jwks
+    return app
 
     @app.route("/.well-known/openid-configuration", methods=["GET"])
     def openid_configuration():

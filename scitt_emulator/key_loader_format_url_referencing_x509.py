@@ -40,11 +40,10 @@ def key_loader_format_url_referencing_x509(
                 for certificate in cryptography.x509.load_pem_x509_certificates(
                     contents
                 ):
-                    key = certificate.public_key()
                     keys.append(
                         VerificationKey(
-                            transforms=[key],
-                            original=key,
+                            transforms=[certificate, certificate.public_key()],
+                            original=certificate,
                             original_content_type=CONTENT_TYPE,
                             original_bytes=contents,
                             original_bytes_encoding="utf-8",
@@ -60,8 +59,12 @@ def key_loader_format_url_referencing_x509(
 def to_object_x509(verification_key: VerificationKey) -> dict:
     if verification_key.original_content_type != CONTENT_TYPE:
         return
-
-    # TODO to dict
-    verification_key.original
-
-    return {}
+    return {
+        "content_type": verification_key.original_content_type,
+        "certificate": {
+            "subject": {
+                attribute.rfc4514_attribute_name: attribute.value
+                for attribute in verification_key.original.subject
+            },
+        },
+    }
