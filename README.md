@@ -16,19 +16,6 @@ On Ubuntu, run the following to install Python:
 sudo apt install python3.10-venv
 ```
 
-### Optional Dependencies
-
-If you want to use conda, first install it:
-
-- [Install Conda](https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html)
-
-You can get things setup with the following:
-
-```sh
-conda env create -f environment.yml
-conda activate scitt
-```
-
 ## Clone the Emulator
 
 1. Clone the scitt-api-emulator repository and change into the scitt-api-emulator folder:
@@ -42,6 +29,19 @@ conda activate scitt
     ```sh
     cd scitt-api-emulator
     ```
+
+### Optional Dependencies
+
+If you want to use conda, first install it:
+
+- [Install Conda](https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html)
+
+You can get things setup with the following:
+
+```sh
+conda env create -f environment.yml
+conda activate scitt
+```
 
 ## Start the Proxy Server
 
@@ -63,7 +63,7 @@ The proxy server supports 2 options currently:
 1. The server is running at http://localhost:8000/ and uses the `workspace/` folder to store the service parameters and service state  
   **Note:** _The default port is `8000` but can be changed with the `--port` argument._
 1. Start another shell to run the test scripts, leaving the above shell for diagnostic output
-1. Skip to [Create Claims](#create-claims)
+1. Skip to [Create Signed Claims](#create-signed-claims)
 
 ### Start an RKVST SCITT Proxy Service
 
@@ -120,29 +120,26 @@ They can be used with the built-in server or an external service implementation.
         Receipt:  ./claim.receipt.cbor
     ```
 
-1. Save the entryId to an environment variable
+1. Create an environment variable (`ENTRY_ID`) for the value of `entryId` above:
 
    ```sh
    ENTRY_ID=<entryId>
    ```
 
-### Retrieve Claims
+### Retrieve Statements and Receipts
 
-1. Retrieve the claim, based on the ENTRY_ID set from the `submit-claim` command above
+1. Retrieve the Statement, based on the ENTRY_ID set from the `submit-claim` command above
 
-```sh
-./scitt-emulator.sh client retrieve-claim \
-  --entry-id $ENTRY_ID \
-  --out claim.cose
-```
+    ```sh
+    ./scitt-emulator.sh client retrieve-claim \
+    --entry-id $ENTRY_ID \
+    --out claim.cose
+    ```
 
-This command sends the following request:
+    `retrieve-claim` sends the following request:  
+   `GET /entries/<entry_id>` to retrieve the claim.
 
-- `GET /entries/<entry_id>` to retrieve the claim.
-
-### Retrieve Receipts
-
-1. Replace the `<entryId>` with the value from the `submit-claim` command above
+1. Retrieve the Receipt, based on the ENTRY_ID set from the `submit-claim` command above
 
     ```sh
     ./scitt-emulator.sh client retrieve-receipt \
@@ -150,12 +147,8 @@ This command sends the following request:
         --out receipt.cbor
     ```
 
-The `retrieve-receipt` command uses the default service URL `http://127.0.0.1:8000` which can be changed with the `--url` argument.
-It can be used with the built-in server or an external service implementation.
-
-This command sends the following request:
-
-- `GET /entries/<entry_id>/receipt` to retrieve the receipt.
+    `retrieve-receipt` sends the following request:  
+    `GET /entries/<entry_id>/receipt` to retrieve the receipt.
 
 ### Validate Receipts
 
