@@ -64,6 +64,7 @@ def verify_statement(
             # TODO Logging
             continue
         msg.key = verification_key.cose
+        verify_signature = False
         with contextlib.suppress(Exception):
             verify_signature = msg.verify_signature()
         if verify_signature:

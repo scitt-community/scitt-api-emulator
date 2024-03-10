@@ -22,7 +22,8 @@ setup(
             'transform_key_instance_cryptography_ecc_public_to_jwcrypto_jwk=scitt_emulator:key_loader_format_url_referencing_ssh_authorized_keys.transform_key_instance_cryptography_ecc_public_to_jwcrypto_jwk',
         ],
         'scitt_emulator.key_helpers.verification_key_to_object': [
-            'to_object_oidc_issuer=scitt_emulator.key_loader_format_url_referencing_oidc_issuer:to_object_oidc_issuer',
+            'to_object_jwk=scitt_emulator.key_loader_format_did_jwk:to_object_jwk',
+            'to_object_ssh_public=scitt_emulator.key_loader_format_url_referencing_ssh_authorized_keys:to_object_ssh_public',
         ],
     },
     python_requires=">=3.8",

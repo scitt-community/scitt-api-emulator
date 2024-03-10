@@ -14,6 +14,7 @@ import itertools
 import subprocess
 import urllib.parse
 
+import pytest
 import myst_parser.parsers.docutils_
 import docutils.nodes
 import docutils.utils
@@ -28,6 +29,7 @@ from .test_cli import (
     payload,
     execute_cli,
     create_flask_app_oidc_server,
+    create_flask_app_ssh_authorized_keys_server,
 )
 
 
@@ -162,7 +164,13 @@ def url_to_did_web(url_string):
         ]
     )
 
-def test_docs_registration_policies(tmp_path):
+@pytest.mark.parametrize(
+    "create_flask_app_notary_identity", [
+        create_flask_app_oidc_server,
+        create_flask_app_ssh_authorized_keys_server,
+    ],
+)
+def test_docs_registration_policies(create_flask_app_notary_identity, tmp_path):
     workspace_path = tmp_path / "workspace"
 
     claim_path = tmp_path / "claim.cose"
@@ -195,7 +203,7 @@ def test_docs_registration_policies(tmp_path):
 
     with Service(
         {"key": key, "algorithms": [algorithm]},
-        create_flask_app=create_flask_app_oidc_server,
+        create_flask_app=create_flask_app_notary_identity,
     ) as oidc_service, Service(
         {
             "tree_alg": "CCF",
@@ -238,7 +246,7 @@ def test_docs_registration_policies(tmp_path):
         assert os.path.exists(claim_path)
 
         # replace example issuer with test OIDC service issuer (URL) in error
-        claim_denied_error_blocked = CLAIM_DENIED_ERROR_BLOCKED
+        claim_denied_error_blocked = copy.deepcopy(CLAIM_DENIED_ERROR_BLOCKED)
         claim_denied_error_blocked["detail"] = claim_denied_error_blocked["detail"].replace(
             "did:web:denied.example.com", issuer,
         )
@@ -276,27 +284,7 @@ def test_docs_registration_policies(tmp_path):
             )
         )
 
-        # submit accepted claim using SSH authorized_keys lookup
-        command = [
-            "client",
-            "submit-claim",
-            "--claim",
-            claim_path,
-            "--out",
-            receipt_path,
-            "--out-entry-id",
-            entry_id_path,
-            "--url",
-            service.url
-        ]
-        execute_cli(command)
-        assert os.path.exists(receipt_path)
-        receipt_path.unlink()
-        assert os.path.exists(entry_id_path)
-        receipt_path.unlink(entry_id_path)
-
-        # TODO Switch back on the OIDC routes
-        # submit accepted claim using OIDC -> jwks lookup
+        # submit accepted claim
         command = [
             "client",
             "submit-claim",

@@ -37,3 +37,17 @@ def key_loader_format_did_jwk(
             cose=None,
         )
     ]
+
+
+def to_object_jwk(verification_key: VerificationKey) -> dict:
+    if not isinstance(verification_key.original, jwcrypto.jwk.JWK):
+        return
+
+    return {
+        "content_type": verification_key.original_content_type,
+        "key": {
+            **verification_key.original.export_public(as_dict=True),
+            "use": "sig",
+            "kid": verification_key.original.thumbprint(),
+        },
+    }

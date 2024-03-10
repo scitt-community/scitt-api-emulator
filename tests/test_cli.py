@@ -156,13 +156,12 @@ def test_client_cli(use_lro: bool, tmp_path):
         assert receipt == receipt_2
 
 
-def create_flask_app_oidc_server(config):
-    app = Flask("oidc_server")
+def create_flask_app_ssh_authorized_keys_server(config):
+    app = Flask("ssh_authorized_keys_server")
 
     app.config.update(dict(DEBUG=True))
     app.config.update(config)
 
-    # TODO For testing ssh key style issuers, not OIDC related needs to be moved
     @app.route("/", methods=["GET"])
     def ssh_public_keys():
         from cryptography.hazmat.primitives import serialization
@@ -177,6 +176,15 @@ def create_flask_app_oidc_server(config):
             ),
             mimetype="text/plain",
         )
+
+    return app
+
+
+def create_flask_app_oidc_server(config):
+    app = Flask("oidc_server")
+
+    app.config.update(dict(DEBUG=True))
+    app.config.update(config)
 
     @app.route("/.well-known/openid-configuration", methods=["GET"])
     def openid_configuration():

@@ -14,6 +14,7 @@ import jwcrypto.jwk
 
 from scitt_emulator.did_helpers import did_web_to_url
 from scitt_emulator.key_helper_dataclasses import VerificationKey
+from scitt_emulator.key_loader_format_did_jwk import to_object_jwk
 
 
 CONTENT_TYPE = "application/jwk+json"
@@ -72,17 +73,3 @@ def transform_key_instance_jwcrypto_jwk_to_cwt_cose(
         key.export_to_pem(),
         kid=key.thumbprint(),
     )
-
-
-def to_object_oidc_issuer(verification_key: VerificationKey) -> dict:
-    if verification_key.original_content_type != CONTENT_TYPE:
-        return
-
-    return {
-        "content_type": verification_key.original_content_type,
-        "key": {
-            **verification_key.original.export_public(as_dict=True),
-            "use": "sig",
-            "kid": verification_key.original.thumbprint(),
-        },
-    }

@@ -1,4 +1,5 @@
 import contextlib
+import dataclasses
 import urllib.parse
 import urllib.request
 from typing import List, Tuple
@@ -15,6 +16,7 @@ import jwcrypto.jwk
 
 from scitt_emulator.did_helpers import did_web_to_url
 from scitt_emulator.key_helper_dataclasses import VerificationKey
+from scitt_emulator.key_loader_format_did_jwk import to_object_jwk
 
 CONTENT_TYPE = "application/key+ssh"
 
@@ -57,11 +59,27 @@ def key_loader_format_url_referencing_ssh_authorized_keys(
 def transform_key_instance_cryptography_ecc_public_to_jwcrypto_jwk(
     key: cryptography.hazmat.primitives.asymmetric.ec.EllipticCurvePublicKey,
 ) -> jwcrypto.jwk.JWK:
-    if not isinstance(key, cryptography.hazmat.primitives.asymmetric.ec.EllipticCurvePublicKey):
+    if not isinstance(
+        key, cryptography.hazmat.primitives.asymmetric.ec.EllipticCurvePublicKey
+    ):
         raise TypeError(key)
     return jwcrypto.jwk.JWK.from_pem(
         key.public_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+
+
+def to_object_ssh_public(verification_key: VerificationKey) -> dict:
+    if verification_key.original_content_type != CONTENT_TYPE:
+        return
+
+    return to_object_jwk(
+        dataclasses.replace(
+            verification_key,
+            original=transform_key_instance_cryptography_ecc_public_to_jwcrypto_jwk(
+                verification_key.original,
+            )
         )
     )
