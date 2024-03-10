@@ -52,3 +52,16 @@ def key_loader_format_url_referencing_ssh_authorized_keys(
                     )
 
     return keys
+
+
+def transform_key_instance_cryptography_ecc_public_to_jwcrypto_jwk(
+    key: cryptography.hazmat.primitives.asymmetric.ec.EllipticCurvePublicKey,
+) -> jwcrypto.jwk.JWK:
+    if not isinstance(key, cryptography.hazmat.primitives.asymmetric.ec.EllipticCurvePublicKey):
+        raise TypeError(key)
+    return jwcrypto.jwk.JWK.from_pem(
+        key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
