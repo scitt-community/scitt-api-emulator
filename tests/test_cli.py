@@ -9,14 +9,6 @@ import jwt
 import jwcrypto
 from flask import Flask, jsonify, send_file
 from werkzeug.serving import make_server
-from cryptography import x509
-from cryptography.x509.oid import NameOID
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-from jwcrypto import jwk, jws
-import datetime
 from scitt_emulator import cli, server
 from scitt_emulator.oidc import OIDCAuthMiddleware
 
@@ -174,44 +166,6 @@ def create_flask_app_oidc_server(config):
     @app.route("/", methods=["GET"])
     def ssh_public_keys():
         from cryptography.hazmat.primitives import serialization
-        key = app.config["key"]
-        rsa_public_key = jwk.JWK.from_json(key.export_public())
-
-        # Convert the JWK to a public key
-        public_key = rsa_public_key.get_op_key('verify')
-
-        # Create a builder for the X.509 certificate
-        subject = issuer = x509.Name([
-            x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
-            x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, "Oregon"),
-            x509.NameAttribute(NameOID.LOCALITY_NAME, "Portland"),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "SCITT Emulator"),
-            x509.NameAttribute(NameOID.COMMON_NAME, "example.com"),
-        ])
-
-        cert_builder = x509.CertificateBuilder(
-            subject_name=subject,
-            issuer_name=issuer,
-            public_key=public_key,
-            serial_number=x509.random_serial_number(),
-            not_valid_before=datetime.datetime.utcnow(),
-            not_valid_after=datetime.datetime.utcnow() + datetime.timedelta(days=365),  # Certificate valid for 1 year
-            extensions=[]
-        )
-
-        # Self-sign the certificate with the private key
-        private_key_op = key.get_op_key('sign')
-        cert = cert_builder.sign(private_key=private_key_op, algorithm=hashes.SHA256(), backend=default_backend())
-
-        # Serialize the certificate
-        cert_pem = cert.public_bytes(encoding=Encoding.PEM)
-
-        # Display or save the PEM encoded certificate
-        return send_file(
-            io.BytesIO(cert_pem),
-            mimetype="text/plain",
-        )
-        # TODO Re-enable ssh authorized_keys
         return send_file(
             io.BytesIO(
                 serialization.load_pem_public_key(
@@ -223,9 +177,6 @@ def create_flask_app_oidc_server(config):
             ),
             mimetype="text/plain",
         )
-
-    # TODO Re-enable oidc/jwks
-    return app
 
     @app.route("/.well-known/openid-configuration", methods=["GET"])
     def openid_configuration():

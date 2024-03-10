@@ -15,7 +15,6 @@ setup(
             'did_key=scitt_emulator.key_loader_format_did_key:key_loader_format_did_key',
             'url_referencing_oidc_issuer=scitt_emulator.key_loader_format_url_referencing_oidc_issuer:key_loader_format_url_referencing_oidc_issuer',
             'url_referencing_ssh_authorized_keys=scitt_emulator.key_loader_format_url_referencing_ssh_authorized_keys:key_loader_format_url_referencing_ssh_authorized_keys',
-            'url_referencing_x509=scitt_emulator.key_loader_format_url_referencing_x509:key_loader_format_url_referencing_x509',
         ],
         'scitt_emulator.key_helpers.transforms_key_instances': [
             'transform_key_instance_cwt_cose_ec2_to_pycose_ec2=scitt_emulator.key_transforms:transform_key_instance_cwt_cose_ec2_to_pycose_ec2',
@@ -23,9 +22,6 @@ setup(
             'transform_key_instance_jwcrypto_jwk_to_cwt_cose=scitt_emulator.key_loader_format_url_referencing_oidc_issuer:transform_key_instance_jwcrypto_jwk_to_cwt_cose',
         ],
         'scitt_emulator.key_helpers.verification_key_to_object': [
-            # TODO 'to_object_did_key=scitt_emulator.key_loader_format_did_key:to_object_did_key',
-            'to_object_x509=scitt_emulator.key_loader_format_url_referencing_x509:to_object_x509',
-            # TODO 'to_object_ssh_authorized_keys=scitt_emulator.key_loader_format_url_referencing_ssh_authorized_keys:to_object_ssh_authorized_keys',
             'to_object_oidc_issuer=scitt_emulator.key_loader_format_url_referencing_oidc_issuer:to_object_oidc_issuer',
         ],
     },

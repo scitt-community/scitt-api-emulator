@@ -66,42 +66,12 @@ Simple drop rule based on claim content allowlist.
 {
     "$id": "https://schema.example.com/scitt-allowlist.schema.json",
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "required": ["issuer", "issuer_key"],
     "properties": {
         "issuer": {
             "type": "string",
             "enum": [
                 "did:web:example.org"
             ]
-        },
-        "issuer_key": {
-            "type": "object",
-            "required": ["content_type", "certificate"],
-            "properties": {
-                "content_type": {
-                    "type": "string",
-                    "enum": [
-                        "application/pkix-cert"
-                    ]
-                },
-                "certificate": {
-                    "type": "object",
-                    "required": ["subject"],
-                    "properties": {
-                        "subject": {
-                            "type": "object",
-                            "properties": {
-                                "O": {
-                                    "type": "string",
-                                    "enum": [
-                                        "SCITT Emulator"
-                                    ]
-                                }
-                            }
-                        }
-                    }
-                }
-            }
         }
     }
 }

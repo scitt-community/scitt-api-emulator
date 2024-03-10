@@ -14,6 +14,9 @@ from cryptography.hazmat.primitives import serialization
 import jwcrypto.jwk
 
 from scitt_emulator.did_helpers import did_web_to_url
+from scitt_emulator.key_helper_dataclasses import VerificationKey
+
+CONTENT_TYPE = "application/key+ssh"
 
 
 def key_loader_format_url_referencing_ssh_authorized_keys(
@@ -40,7 +43,7 @@ def key_loader_format_url_referencing_ssh_authorized_keys(
                             transforms=[key],
                             original=key,
                             original_content_type=CONTENT_TYPE,
-                            original_bytes=line.encode("utf-8"),
+                            original_bytes=line,
                             original_bytes_encoding="utf-8",
                             usable=False,
                             cwt=None,
