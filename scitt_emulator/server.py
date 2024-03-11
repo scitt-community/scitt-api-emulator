@@ -6,7 +6,7 @@ from pathlib import Path
 from io import BytesIO
 import random
 
-from flask import Flask, request, send_file, make_response
+from flask import Flask, request, send_file, make_response, jsonify
 
 from scitt_emulator.tree_algs import TREE_ALGS
 from scitt_emulator.plugin_helpers import entrypoint_style_load
@@ -55,6 +55,23 @@ def create_flask_app(config):
 
     def is_unavailable():
         return random.random() <= error_rate
+
+    @app.route("/.well-known/transparency-configuration", methods=["GET"])
+    def get_transparency_configuration():
+        if is_unavailable():
+            return make_unavailable_error()
+        return jsonify(
+            {
+                 "issuer": "/",
+                 "registration_endpoint": f"/entries",
+                 "nonce_endpoint": f"/nonce",
+                 "registration_policy": f"/statements/TODO",
+                 "supported_signature_algorithms": ["ES256"],
+                 "jwks": {
+                      "keys": app.scitt_service.keys_as_jwks(),
+                 }
+            }
+        )
 
     @app.route("/entries/<string:entry_id>/receipt", methods=["GET"])
     def get_receipt(entry_id: str):

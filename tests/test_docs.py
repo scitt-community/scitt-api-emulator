@@ -18,6 +18,7 @@ import pytest
 import myst_parser.parsers.docutils_
 import docutils.nodes
 import docutils.utils
+from flask import Flask
 
 import jwcrypto
 
@@ -164,10 +165,21 @@ def url_to_did_web(url_string):
         ]
     )
 
+def create_flask_app_nop_scitt_scrapi(config):
+    # Used to test resolving keys from scrapi
+    # /.well-known/transparency-configuration
+    app = Flask("nop")
+
+    app.config.update(dict(DEBUG=True))
+    app.config.update(config)
+
+    return app
+
 @pytest.mark.parametrize(
     "create_flask_app_notary_identity", [
         create_flask_app_oidc_server,
         create_flask_app_ssh_authorized_keys_server,
+        create_flask_app_nop_scitt_scrapi,
     ],
 )
 def test_docs_registration_policies(create_flask_app_notary_identity, tmp_path):
@@ -208,7 +220,7 @@ def test_docs_registration_policies(create_flask_app_notary_identity, tmp_path):
         {
             "tree_alg": "CCF",
             "workspace": workspace_path,
-            "error_rate": 0.1,
+            "error_rate": 0,
             "use_lro": True,
         }
     ) as service, SimpleFileBasedPolicyEngine(
@@ -222,8 +234,14 @@ def test_docs_registration_policies(create_flask_app_notary_identity, tmp_path):
         # set the policy to enforce
         service.server.app.scitt_service.service_parameters["insertPolicy"] = "external"
 
-        # set the issuer to the did:web version of the OIDC / SSH keys service
-        issuer = url_to_did_web(oidc_service.url)
+        if create_flask_app_nop_scitt_scrapi is create_flask_app_notary_identity:
+            # set the issuer to the SCITT SCRAPI service
+            issuer = url_to_did_web(service.url)
+            # use private key from SCITT SCRAPI service to sign
+            private_key_pem_path = workspace_path.joinpath("storage", "service_private_key.pem")
+        else:
+            # set the issuer to the did:web version of the OIDC / SSH keys service
+            issuer = url_to_did_web(oidc_service.url)
 
         # create claim
         command = [

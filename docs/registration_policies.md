@@ -164,7 +164,7 @@ Example running allowlist check and enforcement.
 
 ```console
 $ npm install nodemon && \
-  node_modules/.bin/nodemon -e .cose --exec 'find workspace/storage/operations -name \*.cose -exec nohup sh -xe policy_engine.sh $(cat workspace/service_parameters.json | jq -r .insertPolicy) {} \;'
+  DID_WEB_ASSUME_SCHEME=http node_modules/.bin/nodemon -e .cose --exec 'find workspace/storage/operations -name \*.cose -exec nohup sh -xe policy_engine.sh $(cat workspace/service_parameters.json | jq -r .insertPolicy) {} \;'
 ```
 
 Also ensure you restart the server with the new config we edited.
@@ -262,6 +262,30 @@ $ cat private-key.pem | python -c 'import sys, json, jwcrypto.jwt; key = jwcrypt
 }
 ```
 
+### SCITT SRCAPI transparency configuration public key resolution
+
+Keys are discovered via making an HTTP GET request to the URL given by the
+`issuer` parameter with `/.well-known/transparency-configuration` as the path
+component. Public keys found within the response body's JSON `jwks.keys` array.
+
+- [`https://transparency.example/.well-known/transparency-configuration`](https://ietf-wg-scitt.github.io/draft-ietf-scitt-scrapi/draft-ietf-scitt-scrapi.html#name-transparency-configuration)
+
+To use this method of resolution create the statement using the FQDN of the
+SCITT SCRAPI service as the issuer. Also ensure you use it's private key to
+sign.
+
+```console
+$ scitt-emulator client create-claim \
+    --private-key-pem workspace/storage/service_private_key.pem \
+    --issuer "http://localhost:8000" \
+    --subject "solar" \
+    --content-type application/json \
+    --payload '{"sun": "yellow"}' \
+    --out claim.cose
+```
+
+### Policy engine executing allowlist policy on denied issuer
+
 Attempt to submit the statement we created. You should see that due to our
 current `allowlist.schema.json` the Transparency Service denied the insertion
 of the statement into the log.
@@ -288,12 +312,14 @@ On instance['issuer']:
     'did:web:example.com'
 ```
 
+### Policy engine executing allowlist policy on allowed issuer
+
 Modify the allowlist to ensure that our issuer, aka our local HTTP server with
 our keys, is set to be the allowed issuer.
 
 ```console
 $ export allowlist="$(cat allowlist.schema.json)" && \
-    jq '.properties.issuer.enum[0] = env.ISSUER_URL' <(echo "${allowlist}") \
+    jq '.properties.issuer.enum = [env.ISSUER_URL, "http://localhost:8000"]' <(echo "${allowlist}") \
     | tee allowlist.schema.json
 ```
 

@@ -58,6 +58,9 @@ class RKVSTSCITTServiceEmulator(SCITTServiceEmulator):
             "serviceCertificate": None,
         }
 
+    def keys_as_jwks(self):
+        return []
+
     def _event_id_to_operation_id(self, event_id: str):
         return event_id.replace('/', '_')
 

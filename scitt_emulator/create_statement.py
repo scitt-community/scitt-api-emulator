@@ -76,8 +76,6 @@ def create_claim(
     # }
 
     # Create COSE_Sign1 structure
-    # https://python-cwt.readthedocs.io/en/stable/algorithms.html
-    alg = "ES384"
     # Create an ad-hoc key
     # oct: size(int)
     # RSA: public_exponent(int), size(int)
@@ -88,6 +86,8 @@ def create_claim(
         key.import_from_pem(private_key_pem_path.read_bytes())
     else:
         key = key.generate(kty="EC", crv="P-384")
+    # https://python-cwt.readthedocs.io/en/stable/algorithms.html
+    alg = key.key_curve.replace("P-", "ES")
     kid = key.thumbprint()
     key_as_pem_bytes = key.export_to_pem(private_key=True, password=None)
     # cwt_cose_key = cwt.COSEKey.generate_symmetric_key(alg=alg, kid=kid)

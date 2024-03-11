@@ -61,6 +61,10 @@ class SCITTServiceEmulator(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def keys_as_jwks(self):
+        raise NotImplementedError
+
+    @abstractmethod
     def create_receipt_contents(self, countersign_tbi: bytes, entry_id: str):
         raise NotImplementedError
 
@@ -235,13 +239,6 @@ class SCITTServiceEmulator(ABC):
             )
         if CWTClaims not in msg.phdr:
             raise ClaimInvalidError("Claim does not have a CWTClaims header parameter")
-
-        try:
-            verification_key = verify_statement(msg)
-        except Exception as e:
-            raise ClaimInvalidError("Failed to verify signature on statement") from e
-        if not verification_key:
-            raise ClaimInvalidError("Failed to verify signature on statement")
 
         # Extract fields of COSE_Sign1 for countersigning
         outer = cbor2.loads(claim)
