@@ -62,7 +62,7 @@ import subprocess
 import contextlib
 import urllib.request
 import concurrent.futures
-from typing import Union, Optional, List, Dict, Any
+from typing import Union, Callable, Optional, List, Dict, Any
 
 
 import yaml
@@ -73,6 +73,9 @@ from celery.result import AsyncResult
 from fastapi import FastAPI
 from pydantic import BaseModel, Field, model_validator, field_validator
 from fastapi.testclient import TestClient
+
+
+from scitt_emulator.plugin_helpers import entrypoint_style_load
 
 
 class PolicyEngineCompleteExitStatuses(enum.Enum):
@@ -772,7 +775,7 @@ def celery_run_workflow_context_stack_pop(context):
 
 
 def celery_run_workflow_context_init(
-    context, request, *, force_init: bool = False
+    context, request, *, force_init: bool = False, extra_inits: List = None,
 ):
     config = context.get("config", {})
     config_cwd = config.get("cwd", os.getcwd())
@@ -807,6 +810,26 @@ def celery_run_workflow_context_init(
         context["stack"] = []
     if force_init or "console_output" not in context:
         context["console_output"] = []
+    if force_init or "_init" not in context:
+        context["_init"] = True
+        if extra_inits:
+            for extra_init in extra_inits:
+                extra_init(context, request)
+
+
+class RunWorkflowConfig(BaseModel, extra="forbid"):
+    extra_inits: Union[List[str], List[Callable]] = Field(default_factory=lambda: [])
+    extra_inits_config: Optional[Dict[str, Any]] = Field(default_factory=lambda: {})
+
+    @field_validator("extra_inits")
+    @classmethod
+    def parse_extra_inits(cls, extra_inits, _info):
+        return list(
+            [
+                extra_init if not isinstance(extra_init, str) else entrypoint_style_load(extra_init)
+                for extra_init in extra_inits
+            ]
+        )
 
 
 @snoop
