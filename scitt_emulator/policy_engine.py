@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 """
 Implement GitHub Actions workflow evaluation as step towards workflow based
 policy engine. TODO Receipts with attestations for SLSA L4.
@@ -9,7 +10,7 @@ NO_CELERY=1 GITHUB_TOKEN=$(gh auth token) nodemon -e py --exec 'clear; python -m
 Terminal 1:
 
 ```bash
-NO_CELERY=1 python -m uvicorn --port 8080 scitt_emulator.policy_engine:app
+GITHUB_TOKEN=$(gh auth token) NO_CELERY=1 ./scitt_emulator/policy_engine.py --workers 1
 ```
 
 **request.yml**
@@ -23,9 +24,12 @@ context:
       GITHUB_ACTOR: "aliceoa"
       GITHUB_ACTOR_ID: "1234567"
   secrets:
-    GITHUB_TOKEN: __GITHUB_TOKEN_FROM_ENV__
+    MY_SECRET: "test-secret"
 workflow: |
-  on: push
+  on:
+    push:
+      branches:
+      - main
 
   jobs:
     lint:
@@ -51,27 +55,37 @@ import copy
 import shlex
 import types
 import atexit
+import asyncio
 import pathlib
 import zipfile
+import inspect
+import argparse
 import tempfile
 import textwrap
-import subprocess
 import traceback
 import itertools
 import subprocess
 import contextlib
 import urllib.request
+import multiprocessing
 import concurrent.futures
-from typing import Union, Callable, Optional, List, Dict, Any
+from typing import Union, Callable, Optional, Tuple, List, Dict, Any, Annotated
 
 
 import yaml
 import snoop
 import pytest
+import gunicorn.app.base
 from celery import Celery
 from celery.result import AsyncResult
-from fastapi import FastAPI
-from pydantic import BaseModel, Field, model_validator, field_validator
+from fastapi import FastAPI, Request
+from pydantic import (
+    BaseModel,
+    PlainSerializer,
+    Field,
+    model_validator,
+    field_validator,
+)
 from fastapi.testclient import TestClient
 
 
@@ -229,13 +243,13 @@ celery_app = Celery(
 
 def download_step_uses_from_url(
     context,
-    policy_engine_request,
+    request,
     step,
     step_uses_org_repo,
     step_uses_version,
     step_download_url,
 ):
-    stack = context["stack"][-1]
+    stack = request.context["stack"][-1]
 
     exit_stack = stack["exit_stack"]
     if "cachedir" in stack:
@@ -281,7 +295,7 @@ def download_step_uses_from_url(
     stack["env"]["GITHUB_ACTION_PATH"] = str(extracted_path.resolve())
 
 
-def download_step_uses(context, policy_engine_request, step):
+def download_step_uses(context, request, step):
     exception = None
     step_uses_org_repo, step_uses_version = step.uses.split("@")
     # TODO refs/heads/
@@ -293,7 +307,7 @@ def download_step_uses(context, policy_engine_request, step):
         try:
             return download_step_uses_from_url(
                 context,
-                policy_engine_request,
+                request,
                 step,
                 step_uses_org_repo,
                 step_uses_version,
@@ -344,8 +358,8 @@ def transform_property_accessors(js_code):
     return transformed_code
 
 
-def _evaluate_using_javascript(context, code_block):
-    stack = context["stack"][-1]
+def _evaluate_using_javascript(context, request, code_block):
+    stack = request.context["stack"][-1]
 
     exit_stack = stack["exit_stack"]
     tempdir = exit_stack.enter_context(
@@ -358,15 +372,16 @@ def _evaluate_using_javascript(context, code_block):
                 "github_", "", 1
             ): evaluate_using_javascript(
                 context,
+                request,
                 input_value,
             )
             for input_key, input_value in stack["env"].items()
             if input_key.startswith("GITHUB_")
         },
         **{
-            "token": stack["secrets"]["GITHUB_TOKEN"],
+            "token": stack["secrets"].get("GITHUB_TOKEN", ""),
             "event": {
-                "inputs": context["inputs"],
+                "inputs": request.context["inputs"],
             },
         },
     }
@@ -402,7 +417,7 @@ def _evaluate_using_javascript(context, code_block):
     )
     output = subprocess.check_output(
         ["deno", "repl", "-q", f"--eval-file={javascript_path.resolve()}"],
-        stdin=context["devnull"],
+        stdin=request.context["devnull"],
         cwd=stack["workspace"],
     ).decode()
     if output.startswith(
@@ -419,7 +434,7 @@ def _evaluate_using_javascript(context, code_block):
     return output.strip()
 
 
-def evaluate_using_javascript(context, code_block):
+def evaluate_using_javascript(context, request, code_block):
     if code_block is None:
         return ""
 
@@ -439,7 +454,7 @@ def evaluate_using_javascript(context, code_block):
         # Extract the data between "${{" and "}}"
         data = code_block[start_idx + 3 : end_idx - 2]
         # Call evaluate_using_javascript() with the extracted data
-        evaluated_data = _evaluate_using_javascript(context, data)
+        evaluated_data = _evaluate_using_javascript(context, request, data)
         # Append the evaluated data to the result
         result += code_block[start_idx + 3 : end_idx - 2].replace(
             data, str(evaluated_data)
@@ -452,6 +467,7 @@ def evaluate_using_javascript(context, code_block):
     return result
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "template,should_be",
     [
@@ -465,33 +481,36 @@ def evaluate_using_javascript(context, code_block):
         ],
     ],
 )
-def test_evaluate_using_javascript(template, should_be):
-    context = {
-        "config": {
-            "env": {
-                "GITHUB_ACTOR": "aliceoa",
-                "GITHUB_ACTOR_ID": "1234567",
+async def test_evaluate_using_javascript(template, should_be):
+    context = PolicyEngineContext()
+    request = PolicyEngineRequest(
+        context={
+            "config": {
+                "env": {
+                    "GITHUB_ACTOR": "aliceoa",
+                    "GITHUB_ACTOR_ID": "1234567",
+                },
             },
-        },
-        "secrets": {
-            "GITHUB_TOKEN": "",
-        },
-    }
-    stack = {}
+        }
+    )
     with contextlib.ExitStack() as exit_stack:
-        if "exit_stack" not in context:
-            context["exit_stack"] = exit_stack
-        celery_run_workflow_context_init(
+        if "exit_stack" not in request.context:
+            request.context["exit_stack"] = exit_stack
+        await celery_run_workflow_context_init(
             context,
-            PolicyEngineRequest(),
+            request,
         )
-        if stack is None or len(stack) == 0:
-            stack = celery_run_workflow_context_stack_make_new(context)
-            stack["secrets"] = copy.deepcopy(context["secrets"])
-        celery_run_workflow_context_stack_push(context, stack)
+        stack = celery_run_workflow_context_stack_make_new(context, request)
+        stack["secrets"] = copy.deepcopy(request.context["secrets"])
+        celery_run_workflow_context_stack_push(
+            context,
+            request,
+            stack,
+        )
 
         evaluated = evaluate_using_javascript(
             context,
+            request,
             template,
         )
         assert evaluated == should_be
@@ -523,34 +542,34 @@ def step_parse_outputs_github_actions(context, step, step_outputs_string):
     return outputs
 
 
-def step_build_default_inputs(context, action_yaml_obj, step):
+def step_build_default_inputs(context, request, action_yaml_obj, step):
     return {
         f"INPUT_{input_key.upper()}": evaluate_using_javascript(
-            context, input_value["default"]
+            context, request, input_value["default"]
         )
         for input_key, input_value in action_yaml_obj.get("inputs", {}).items()
         if "default" in input_value
     }
 
 
-def step_build_env(context, step):
+def step_build_env(context, request, step):
     return {
-        input_key: evaluate_using_javascript(context, input_value)
+        input_key: evaluate_using_javascript(context, request, input_value)
         for input_key, input_value in step.env.items()
     }
 
 
-def step_build_inputs(context, step):
+def step_build_inputs(context, request, step):
     return {
         f"INPUT_{input_key.upper()}": evaluate_using_javascript(
-            context, input_value
+            context, request, input_value
         )
         for input_key, input_value in step.with_inputs.items()
     }
 
 
-def step_io_output_github_actions(context):
-    stack = context["stack"][-1]
+def step_io_output_github_actions(context, request):
+    stack = request.context["stack"][-1]
     step_tempdir = stack["exit_stack"].enter_context(
         tempfile.TemporaryDirectory(dir=stack.get("tempdir", None)),
     )
@@ -566,10 +585,8 @@ def step_io_output_github_actions(context):
 
 
 @snoop
-def step_io_update_stack_output_and_env_github_actions(
-    context, policy_engine_request, step
-):
-    stack = context["stack"][-1]
+def step_io_update_stack_output_and_env_github_actions(context, request, step):
+    stack = request.context["stack"][-1]
     outputs = step_parse_outputs_github_actions(
         context,
         step,
@@ -588,8 +605,8 @@ def step_io_update_stack_output_and_env_github_actions(
 
 
 @snoop
-def execute_step_uses(context, policy_engine_request, step):
-    stack = context["stack"][-1]
+def execute_step_uses(context, request, step):
+    stack = request.context["stack"][-1]
 
     extracted_path = stack["steps"]["extracted_path"][step.uses]
     action_yaml_path = list(extracted_path.glob("action.*"))[0]
@@ -597,8 +614,10 @@ def execute_step_uses(context, policy_engine_request, step):
 
     stack["env"].update(
         {
-            **step_io_output_github_actions(context),
-            **step_build_default_inputs(context, action_yaml_obj, step),
+            **step_io_output_github_actions(context, request),
+            **step_build_default_inputs(
+                context, request, action_yaml_obj, step
+            ),
         }
     )
 
@@ -614,7 +633,7 @@ def execute_step_uses(context, policy_engine_request, step):
                     extracted_path.joinpath(action_yaml_obj["runs"]["main"]),
                 ],
                 cwd=stack["workspace"],
-                stdin=context["devnull"],
+                stdin=request.context["devnull"],
                 stdout=tee_proc.stdin,
                 stderr=tee_proc.stdin,
                 env=env,
@@ -629,10 +648,11 @@ def execute_step_uses(context, policy_engine_request, step):
             if "with" in composite_step:
                 composite_step["with_inputs"] = composite_step["with"]
                 del composite_step["with"]
-        stack = celery_run_workflow_context_stack_make_new(context)
+        stack = celery_run_workflow_context_stack_make_new(context, request)
         # TODO Reusable workflows, populate secrets
-        # stack["secrets"] = context["secrets"]
+        # stack["secrets"] = request.context["secrets"]
         celery_run_workflow(
+            context,
             PolicyEngineRequest(
                 inputs=step.with_inputs,
                 workflow={
@@ -642,27 +662,25 @@ def execute_step_uses(context, policy_engine_request, step):
                         },
                     },
                 },
-                context=context,
+                context=request.context,
                 stack=stack,
             ),
         )
     else:
         raise NotImplementedError("Only node and composite actions implemented")
 
-    step_io_update_stack_output_and_env_github_actions(
-        context, policy_engine_request, step
-    )
+    step_io_update_stack_output_and_env_github_actions(context, request, step)
 
 
-def execute_step_uses_org_repo_at_version(context, policy_engine_request, step):
-    download_step_uses(context, policy_engine_request, step)
-    execute_step_uses(context, policy_engine_request, step)
+def execute_step_uses_org_repo_at_version(context, request, step):
+    download_step_uses(context, request, step)
+    execute_step_uses(context, request, step)
 
 
 @snoop
-def execute_step_run(context, policy_engine_request, step):
-    stack = context["stack"][-1]
-    stack["env"].update(step_io_output_github_actions(context))
+def execute_step_run(context, request, step):
+    stack = request.context["stack"][-1]
+    stack["env"].update(step_io_output_github_actions(context, request))
 
     temp_script_path = pathlib.Path(
         stack["exit_stack"].enter_context(
@@ -687,7 +705,7 @@ def execute_step_run(context, policy_engine_request, step):
         completed_proc = subprocess.run(
             cmd,
             cwd=stack["workspace"],
-            stdin=context["devnull"],
+            stdin=request.context["devnull"],
             stdout=tee_proc.stdin,
             stderr=tee_proc.stdin,
             env=env,
@@ -698,44 +716,42 @@ def execute_step_run(context, policy_engine_request, step):
 
     step_io_update_stack_output_and_env_github_actions(
         context,
-        policy_engine_request,
+        request,
         step,
     )
 
 
 @snoop
-def execute_step(context, policy_engine_request, step):
-    old_stack = context["stack"][-1]
-    stack = celery_run_workflow_context_stack_make_new(context)
-    celery_run_workflow_context_stack_push(context, stack)
+def execute_step(context, request, step):
+    old_stack = request.context["stack"][-1]
+    stack = celery_run_workflow_context_stack_make_new(context, request)
+    celery_run_workflow_context_stack_push(context, request, stack)
     # Keep the weakref, outputs should mod via pointer
     stack["outputs"] = old_stack["outputs"]
     # Don't allow messing with secrets (use copy.deepcopy)
     stack["secrets"] = copy.deepcopy(old_stack["secrets"])
-    stack["env"].update(step_build_env(context, step))
-    stack["env"].update(step_build_inputs(context, step))
+    stack["env"].update(step_build_env(context, request, step))
+    stack["env"].update(step_build_inputs(context, request, step))
 
     if step.uses:
         if "@" in step.uses:
-            execute_step_uses_org_repo_at_version(
-                context, policy_engine_request, step
-            )
+            execute_step_uses_org_repo_at_version(context, request, step)
         else:
             raise NotImplementedError("Only uses: org/repo@vXYZ is implemented")
     elif step.run:
-        execute_step_run(context, policy_engine_request, step)
+        execute_step_run(context, request, step)
     else:
         raise NotImplementedError(
             "Only uses: org/repo@vXYZ and run implemented"
         )
 
-    celery_run_workflow_context_stack_pop(context)
+    celery_run_workflow_context_stack_pop(context, request)
 
 
-def celery_run_workflow_context_stack_make_new(context):
-    old_stack = context
-    if context["stack"]:
-        old_stack = context["stack"][-1]
+def celery_run_workflow_context_stack_make_new(context, request):
+    old_stack = request.context
+    if request.context["stack"]:
+        old_stack = request.context["stack"][-1]
     stack = {
         "outputs": {},
         "secrets": {},
@@ -748,10 +764,10 @@ def celery_run_workflow_context_stack_make_new(context):
     return stack
 
 
-def celery_run_workflow_context_stack_push(context, stack):
-    old_stack = context
-    if context["stack"]:
-        old_stack = context["stack"][-1]
+def celery_run_workflow_context_stack_push(context, request, stack):
+    old_stack = request.context
+    if request.context["stack"]:
+        old_stack = request.context["stack"][-1]
     stack["exit_stack"] = old_stack["exit_stack"].enter_context(
         contextlib.ExitStack(),
     )
@@ -763,103 +779,147 @@ def celery_run_workflow_context_stack_push(context, stack):
             "console_output.txt",
         )
     )
-    context["stack"].append(stack)
+    request.context["stack"].append(stack)
 
 
-def celery_run_workflow_context_stack_pop(context):
+def celery_run_workflow_context_stack_pop(context, request):
     # TODO Deal with ordering of lines by time, logging module?
-    context["console_output"].append(
-        pathlib.Path(context["stack"][-1]["console_output"]).read_bytes(),
+    request.context["console_output"].append(
+        pathlib.Path(
+            request.context["stack"][-1]["console_output"]
+        ).read_bytes(),
     )
-    context["stack"].pop()
+    request.context["stack"].pop()
 
 
-def celery_run_workflow_context_init(
-    context, request, *, force_init: bool = False, extra_inits: List = None,
+async def celery_run_workflow_context_init(
+    context,
+    request,
+    *,
+    force_init: bool = False,
 ):
-    config = context.get("config", {})
+    request.context.setdefault("secrets", {})
+    config = request.context.get("config", {})
     config_cwd = config.get("cwd", os.getcwd())
     config_env = config.get("env", {})
-    if force_init or "env" not in context:
-        context["env"] = copy.deepcopy(config_env)
-    if force_init or "devnull" not in context:
+    if force_init or "env" not in request.context:
+        request.context["env"] = copy.deepcopy(config_env)
+    if force_init or "devnull" not in request.context:
         # Open /dev/null for empty stdin to subprocesses
-        context["devnull"] = open(os.devnull)
-    if force_init or "inputs" not in context:
-        context["inputs"] = copy.deepcopy(request.inputs)
-    if force_init or "cachedir" not in context:
+        request.context["devnull"] = open(os.devnull)
+    if force_init or "inputs" not in request.context:
+        request.context["inputs"] = copy.deepcopy(request.inputs)
+    if force_init or "cachedir" not in request.context:
         # Cache dir for caching actions
         cache_path = pathlib.Path(config_cwd, ".cache")
         cache_path.mkdir(exist_ok=True)
-        context["cachedir"] = str(cache_path)
-    if force_init or "tempdir" not in context:
+        request.context["cachedir"] = str(cache_path)
+    if force_init or "tempdir" not in request.context:
         # Temp dir
         tempdir_path = pathlib.Path(config_cwd, ".tempdir")
         tempdir_path.mkdir(exist_ok=True)
-        context["tempdir"] = str(tempdir_path)
-        if "RUNNER_TEMP" not in context["env"]:
-            context["env"]["RUNNER_TEMP"] = context["tempdir"]
-        if "RUNNER_TOOL_CACHE" not in context["env"]:
-            context["env"]["RUNNER_TOOL_CACHE"] = context["tempdir"]
-    if force_init or "workspace" not in context:
+        request.context["tempdir"] = str(tempdir_path)
+        if "RUNNER_TEMP" not in request.context["env"]:
+            request.context["env"]["RUNNER_TEMP"] = request.context["tempdir"]
+        if "RUNNER_TOOL_CACHE" not in request.context["env"]:
+            request.context["env"]["RUNNER_TOOL_CACHE"] = request.context[
+                "tempdir"
+            ]
+    if force_init or "workspace" not in request.context:
         # Workspace dir
-        context["workspace"] = context["exit_stack"].enter_context(
+        request.context["workspace"] = request.context[
+            "exit_stack"
+        ].enter_context(
             tempfile.TemporaryDirectory(dir=config.get("tempdir", None)),
         )
-    if force_init or "stack" not in context:
-        context["stack"] = []
-    if force_init or "console_output" not in context:
-        context["console_output"] = []
-    if force_init or "_init" not in context:
-        context["_init"] = True
-        if extra_inits:
-            for extra_init in extra_inits:
+    if force_init or "stack" not in request.context:
+        request.context["stack"] = []
+    if force_init or "console_output" not in request.context:
+        request.context["console_output"] = []
+    if force_init or "_init" not in request.context:
+        request.context["_init"] = True
+        for extra_init in context.extra_inits:
+            if inspect.iscoroutinefunction(extra_init):
+                await extra_init(context, request)
+            else:
                 extra_init(context, request)
 
 
-class RunWorkflowConfig(BaseModel, extra="forbid"):
-    extra_inits: Union[List[str], List[Callable]] = Field(default_factory=lambda: [])
-    extra_inits_config: Optional[Dict[str, Any]] = Field(default_factory=lambda: {})
+async def policy_engine_context_extra_init_secret_github_token_from_env(
+    context, request
+):
+    # TODO Another function which overrides or clears secrets if set
+    secrets = request.context["secrets"]
+    if "GITHUB_TOKEN" not in secrets:
+        secrets["GITHUB_TOKEN"] = os.environ.get("GITHUB_TOKEN", "")
+
+
+AnnotatedEntrypoint = Annotated[
+    # List[Callable], PlainSerializer(lambda obj: f"{inspect.getmodule(obj).__name__}:{obj.__name__}" if obj is not None and inspect.getmodule(obj) is not None else obj, return_type=str)
+    Callable,
+    PlainSerializer(
+        lambda obj: f"{inspect.getmodule(obj).__name__}:{obj.__name__}"
+        if obj is not None and inspect.getmodule(obj) is not None
+        else obj,
+        return_type=str,
+    ),
+]
+
+
+class PolicyEngineContext(BaseModel, extra="forbid"):
+    extra_inits: Union[List[str], List[AnnotatedEntrypoint]] = Field(
+        default_factory=lambda: [
+            policy_engine_context_extra_init_secret_github_token_from_env,
+        ],
+    )
+    extra_inits_config: Optional[Dict[str, Any]] = Field(
+        default_factory=lambda: {}
+    )
 
     @field_validator("extra_inits")
     @classmethod
     def parse_extra_inits(cls, extra_inits, _info):
         return list(
             [
-                extra_init if not isinstance(extra_init, str) else entrypoint_style_load(extra_init)
+                extra_init
+                if not isinstance(extra_init, str)
+                else list(entrypoint_style_load(extra_init))[0]
                 for extra_init in extra_inits
             ]
         )
 
 
-@snoop
-def celery_run_workflow(request_json):
-    snoop.pp(request_json)
-    request = PolicyEngineRequest.model_validate_json(request_json)
+async def async_celery_run_workflow(context, request):
+    snoop.pp(context)
+    if isinstance(context, str):
+        context = PolicyEngineContext.model_validate_json(context)
+    snoop.pp(context)
     snoop.pp(request)
-    context = request.context
+    if isinstance(request, str):
+        request = PolicyEngineRequest.model_validate_json(request)
+    snoop.pp(request)
     stack = request.stack
 
     workflow = request.workflow
 
     with contextlib.ExitStack() as exit_stack:
-        if "exit_stack" not in context:
-            context["exit_stack"] = exit_stack
-        celery_run_workflow_context_init(
+        if "exit_stack" not in request.context:
+            request.context["exit_stack"] = exit_stack
+        await celery_run_workflow_context_init(
             context,
             request,
         )
         if stack is None or len(stack) == 0:
-            stack = celery_run_workflow_context_stack_make_new(context)
-            stack["secrets"] = copy.deepcopy(context["secrets"])
-        celery_run_workflow_context_stack_push(context, stack)
+            stack = celery_run_workflow_context_stack_make_new(context, request)
+            stack["secrets"] = copy.deepcopy(request.context["secrets"])
+        celery_run_workflow_context_stack_push(context, request, stack)
         # Run steps
         for job in workflow.jobs.values():
             # TODO Kick off jobs in parallel / dep matrix
             for step in job.steps:
                 execute_step(context, request, step)
         snoop.pp(stack)
-        snoop.pp(context["stack"][-1]["outputs"])
+        snoop.pp(request.context["stack"][-1]["outputs"])
 
     detail = PolicyEngineComplete(
         id="",
@@ -873,11 +933,23 @@ def celery_run_workflow(request_json):
     return request_status.model_dump_json()
 
 
+def celery_run_workflow(context, request):
+    return asyncio.get_event_loop().run_until_complete(
+        async_celery_run_workflow(context, request),
+    )
+
+
 task_celery_run_workflow = celery_app.task(celery_run_workflow)
 
 
+def number_of_workers():
+    return (multiprocessing.cpu_count() * 2) + 1
+
+
 NO_CELERY_ASYNC_RESULTS = {}
-EXECUTOR = concurrent.futures.ProcessPoolExecutor().__enter__()
+EXECUTOR = concurrent.futures.ProcessPoolExecutor(
+    max_workers=number_of_workers()
+).__enter__()
 atexit.register(lambda: EXECUTOR.__exit__(None, None, None))
 
 
@@ -940,62 +1012,99 @@ if "NO_CELERY" in os.environ:
     task_celery_run_workflow = no_celery_task(celery_run_workflow)
 
 
-app = FastAPI()
-
-
-@app.get("/request/status/{policy_engine_request_id}")
-def route_policy_engine_status(
-    policy_engine_request_id: str,
-) -> PolicyEngineStatus:
-    global celery_app
-    policy_engine_request_task = AsyncResult(
-        policy_engine_request_id, app=celery_app
-    )
-    if policy_engine_request_task.state == "PENDING":
-        policy_engine_request_status = PolicyEngineStatus(
-            status=PolicyEngineStatuses.IN_PROGRESS,
-            detail=PolicyEngineInProgress(
-                id=policy_engine_request_id,
-                # TODO Provide previous status updates?
-                status_updates={},
-            ),
+@contextlib.asynccontextmanager
+async def startup_fastapi_app_policy_engine_context(
+    app,
+    context: Optional[Dict[str, Any]] = None,
+):
+    if context is None:
+        context = {}
+    if "POLICY_ENGINE_CONFIG" in os.environ:
+        context.update(json.loads(os.environ["POLICY_ENGINE_CONFIG"]))
+    elif "POLICY_ENGINE_CONFIG_PATH" in os.environ:
+        context.update(
+            json.loads(
+                pathlib.Path(
+                    os.environ["POLICY_ENGINE_CONFIG_PATH"]
+                ).read_text()
+            )
         )
-    elif policy_engine_request_task.state in ("SUCCESS", "FAILURE"):
-        status_json_string = policy_engine_request_task.get()
-        snoop.pp(status_json_string)
-        status = json.loads(status_json_string)
-        detail_class = DETAIL_CLASS_MAPPING[status["status"]]
-        status["detail"] = detail_class(**status["detail"])
-        policy_engine_request_status = PolicyEngineStatus(**status)
-    else:
-        policy_engine_request_status = PolicyEngineStatus(
-            status=PolicyEngineStatuses.UNKNOWN,
-            detail=PolicyEngineUnknown(
-                id=policy_engine_request_id,
-            ),
-        )
-    snoop.pp(policy_engine_request_task.__dict__)
-    snoop.pp(policy_engine_request_status)
-    return policy_engine_request_status
+    yield {"context": PolicyEngineContext.model_validate(context)}
 
 
-@app.put("/request/create")
-def route_policy_engine_request(
-    request: PolicyEngineRequest,
-) -> PolicyEngineStatus:
-    # TODO Handle when submitted.status cases
-    policy_engine_request_status = PolicyEngineStatus(
-        status=PolicyEngineStatuses.SUBMITTED,
-        detail=PolicyEngineSubmitted(
-            id=str(
-                task_celery_run_workflow.delay(
-                    request.model_dump_json(),
-                ).id
-            ),
+def make_fastapi_app(*, context: Optional[Dict[str, Any]] = None):
+    app = FastAPI(
+        lifespan=lambda app: startup_fastapi_app_policy_engine_context(
+            app, context
         ),
     )
-    snoop.pp(policy_engine_request_status)
-    return policy_engine_request_status
+
+    @app.get("/request/status/{request_id}")
+    def route_policy_engine_status(
+        request_id: str,
+    ) -> PolicyEngineStatus:
+        global celery_app
+        request_task = AsyncResult(request_id, app=celery_app)
+        if request_task.state == "PENDING":
+            request_status = PolicyEngineStatus(
+                status=PolicyEngineStatuses.IN_PROGRESS,
+                detail=PolicyEngineInProgress(
+                    id=request_id,
+                    # TODO Provide previous status updates?
+                    status_updates={},
+                ),
+            )
+        elif request_task.state in ("SUCCESS", "FAILURE"):
+            status_json_string = request_task.get()
+            snoop.pp(status_json_string)
+            status = json.loads(status_json_string)
+            detail_class = DETAIL_CLASS_MAPPING[status["status"]]
+            status["detail"] = detail_class(**status["detail"])
+            request_status = PolicyEngineStatus(**status)
+        else:
+            request_status = PolicyEngineStatus(
+                status=PolicyEngineStatuses.UNKNOWN,
+                detail=PolicyEngineUnknown(
+                    id=request_id,
+                ),
+            )
+        snoop.pp(request_task.__dict__)
+        snoop.pp(request_status)
+        return request_status
+
+    @app.put("/request/create")
+    def route_request(
+        request: PolicyEngineRequest,
+        fastapi_request: Request,
+    ) -> PolicyEngineStatus:
+        snoop.pp(fastapi_request.state)
+        # TODO Handle when submitted.status cases
+        request_status = PolicyEngineStatus(
+            status=PolicyEngineStatuses.SUBMITTED,
+            detail=PolicyEngineSubmitted(
+                id=str(
+                    task_celery_run_workflow.delay(
+                        fastapi_request.state.context.model_dump_json(),
+                        request.model_dump_json(),
+                    ).id
+                ),
+            ),
+        )
+        snoop.pp(request_status)
+        return request_status
+
+    return app
+
+
+@pytest.fixture
+def pytest_fixure_fastapi_app():
+    yield make_fastapi_app()
+
+
+@pytest.fixture
+def client(pytest_fixure_fastapi_app):
+    with TestClient(pytest_fixure_fastapi_app) as client:
+        yield client
 
 
 def background_task_celery_worker():
@@ -1068,11 +1177,9 @@ def pytest_fixture_background_task_celery_worker():
     ],
 )
 async def test_read_main(
-    pytest_fixture_background_task_celery_worker,
+    client,
     workflow,
 ):
-    client = TestClient(app)
-
     policy_engine_request = PolicyEngineRequest(
         inputs={
             "repo_name": "scitt-community/scitt-api-emulator",
@@ -1086,7 +1193,6 @@ async def test_read_main(
                     "GITHUB_ACTOR_ID": "1234567",
                 },
             },
-            "secrets": {"GITHUB_TOKEN": os.environ.get("GITHUB_TOKEN", "")},
         },
         # URN for receipt for policy / transparency-configuration
         workflow=workflow,
@@ -1108,7 +1214,9 @@ async def test_read_main(
     # Check complete
     for _ in range(0, 1000):
         response = client.get(f"/request/status/{policy_engine_request_id}")
-        assert response.status_code == 200, json.dumps(response.json(), indent=4)
+        assert response.status_code == 200, json.dumps(
+            response.json(), indent=4
+        )
         policy_engine_request_status = response.json()
         policy_engine_request_id = policy_engine_request_status["detail"]["id"]
         if (
@@ -1125,3 +1233,70 @@ async def test_read_main(
 
     # Check completed results
     policy_engine_request_completed = policy_engine_request_status["detail"]
+
+
+class StandaloneApplication(gunicorn.app.base.BaseApplication):
+    # https://docs.gunicorn.org/en/stable/custom.html
+    # https://www.uvicorn.org/deployment/#gunicorn
+
+    def __init__(self, app, options=None):
+        self.options = options or {}
+        self.application = app
+        super().__init__()
+
+    def load_config(self):
+        config = {
+            key: value
+            for key, value in self.options.items()
+            if key in self.cfg.settings and value is not None
+        }
+        for key, value in config.items():
+            self.cfg.set(key.lower(), value)
+
+    def load(self):
+        return self.application
+
+
+def main():
+    estimated_number_of_workers = number_of_workers()
+
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawTextHelpFormatter
+    )
+    parser.add_argument(
+        "--bind",
+        default="127.0.0.1:8080",
+        help="Interface to bind on, default: 127.0.0.1:8080",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=estimated_number_of_workers,
+        help=f"Number of workers, default: {estimated_number_of_workers}",
+    )
+    parser.add_argument(
+        "--context-extra-inits",
+        nargs="+",
+        default=[
+            policy_engine_context_extra_init_secret_github_token_from_env,
+        ],
+        help=f"Entrypoint style paths for PolicyEngineContext.extra_inits",
+    )
+
+    args = parser.parse_args()
+
+    app = make_fastapi_app(
+        context={
+            "extra_inits": args.context_extra_inits,
+        },
+    )
+    options = {
+        "bind": args.bind,
+        "workers": args.workers,
+        "worker_class": "uvicorn.workers.UvicornWorker",
+    }
+    StandaloneApplication(app, options).run()
+
+
+if __name__ == "__main__":
+    main()
