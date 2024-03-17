@@ -75,6 +75,9 @@ from typing import Union, Callable, Optional, Tuple, List, Dict, Any, Annotated
 import yaml
 import snoop
 import pytest
+import aiohttp
+import gidgethub.apps
+import gidgethub.aiohttp
 import gunicorn.app.base
 from celery import Celery
 from celery.result import AsyncResult
@@ -845,17 +848,75 @@ async def celery_run_workflow_context_init(
                 extra_init(context, request)
 
 
-async def policy_engine_context_extra_init_secret_github_token_from_env(
+def policy_engine_context_extra_init_secret_github_token_from_env(
     context, request
 ):
     # TODO Another function which overrides or clears secrets if set
     secrets = request.context["secrets"]
-    if "GITHUB_TOKEN" not in secrets:
-        secrets["GITHUB_TOKEN"] = os.environ.get("GITHUB_TOKEN", "")
+    if "GITHUB_TOKEN" not in secrets and "GITHUB_TOKEN" in os.environ:
+        secrets["GITHUB_TOKEN"] = os.environ["GITHUB_TOKEN"]
+
+
+async def policy_engine_context_extra_init_secret_github_token_from_github_app(
+    context, request
+):
+    secrets = request.context["secrets"]
+    if "GITHUB_TOKEN" in secrets:
+        return
+
+    app_id = os.environ.get("GITHUB_APP_ID", None)
+    private_key = os.environ.get("GITHUB_APP_PRIVATE_KEY", None)
+    if not (app_id and private_key):
+        return
+
+    del os.environ["GITHUB_APP_PRIVATE_KEY"]
+    if "GITHUB_APP_PRIVATE_KEY" in request.context["env"]:
+        del request.context["env"]["GITHUB_APP_PRIVATE_KEY"]
+
+    # NOTE SECURITY This token has permissions to all installations!!! Swap
+    # it for a more finely scoped token next:
+    danger_wide_permissions_token = gidgethub.apps.get_jwt(
+        app_id=app_id,
+        private_key=private_key,
+    )
+    session = await request.context["async_exit_stack"].enter_async_context(
+        aiohttp.ClientSession(trust_env=True),
+    )
+    gh = gidgethub.aiohttp.GitHubAPI(
+        session,
+        # TODO(security) Ensure getting the token comes after sever side
+        # setting of actor based on webhook or auth.
+        request.context["config"]["env"]["GITHUB_ACTOR"],
+    )
+
+    # Find installation ID associated with requesting actor to generated
+    # finer grained token
+    installation_id = None
+    async for data in gh.getiter(
+        "/app/installations",
+        jwt=danger_wide_permissions_token,
+    ):
+        if (
+            request.context["config"]["env"]["GITHUB_ACTOR"]
+            == data["account"]["login"]
+        ):
+            installation_id = data["id"]
+    if installation_id is None:
+        raise Exception(
+            f'App installation not found for GitHub Actor {request.context["config"]["env"]["GITHUB_ACTOR"]!r}'
+        )
+
+    access_token_response = await gidgethub.apps.get_installation_access_token(
+        gh,
+        installation_id=installation_id,
+        app_id=app_id,
+        private_key=private_key,
+    )
+
+    secrets["GITHUB_TOKEN"] = access_token_response["token"]
 
 
 AnnotatedEntrypoint = Annotated[
-    # List[Callable], PlainSerializer(lambda obj: f"{inspect.getmodule(obj).__name__}:{obj.__name__}" if obj is not None and inspect.getmodule(obj) is not None else obj, return_type=str)
     Callable,
     PlainSerializer(
         lambda obj: f"{inspect.getmodule(obj).__name__}:{obj.__name__}"
@@ -868,9 +929,7 @@ AnnotatedEntrypoint = Annotated[
 
 class PolicyEngineContext(BaseModel, extra="forbid"):
     extra_inits: Union[List[str], List[AnnotatedEntrypoint]] = Field(
-        default_factory=lambda: [
-            policy_engine_context_extra_init_secret_github_token_from_env,
-        ],
+        default_factory=lambda: [],
     )
     extra_inits_config: Optional[Dict[str, Any]] = Field(
         default_factory=lambda: {}
@@ -902,35 +961,40 @@ async def async_celery_run_workflow(context, request):
 
     workflow = request.workflow
 
-    with contextlib.ExitStack() as exit_stack:
-        if "exit_stack" not in request.context:
-            request.context["exit_stack"] = exit_stack
-        await celery_run_workflow_context_init(
-            context,
-            request,
-        )
-        if stack is None or len(stack) == 0:
-            stack = celery_run_workflow_context_stack_make_new(context, request)
-            stack["secrets"] = copy.deepcopy(request.context["secrets"])
-        celery_run_workflow_context_stack_push(context, request, stack)
-        # Run steps
-        for job in workflow.jobs.values():
-            # TODO Kick off jobs in parallel / dep matrix
-            for step in job.steps:
-                execute_step(context, request, step)
-        snoop.pp(stack)
-        snoop.pp(request.context["stack"][-1]["outputs"])
+    async with contextlib.AsyncExitStack() as async_exit_stack:
+        with contextlib.ExitStack() as exit_stack:
+            if "async_exit_stack" not in request.context:
+                request.context["async_exit_stack"] = async_exit_stack
+            if "exit_stack" not in request.context:
+                request.context["exit_stack"] = exit_stack
+            await celery_run_workflow_context_init(
+                context,
+                request,
+            )
+            if stack is None or len(stack) == 0:
+                stack = celery_run_workflow_context_stack_make_new(
+                    context, request
+                )
+                stack["secrets"] = copy.deepcopy(request.context["secrets"])
+            celery_run_workflow_context_stack_push(context, request, stack)
+            # Run steps
+            for job in workflow.jobs.values():
+                # TODO Kick off jobs in parallel / dep matrix
+                for step in job.steps:
+                    execute_step(context, request, step)
+            snoop.pp(stack)
+            snoop.pp(request.context["stack"][-1]["outputs"])
 
-    detail = PolicyEngineComplete(
-        id="",
-        exit_status=PolicyEngineCompleteExitStatuses.SUCCESS,
-        outputs={},
-    )
-    request_status = PolicyEngineStatus(
-        status=PolicyEngineStatuses.COMPLETE,
-        detail=detail,
-    )
-    return request_status.model_dump_json()
+        detail = PolicyEngineComplete(
+            id="",
+            exit_status=PolicyEngineCompleteExitStatuses.SUCCESS,
+            outputs={},
+        )
+        request_status = PolicyEngineStatus(
+            status=PolicyEngineStatuses.COMPLETE,
+            detail=detail,
+        )
+        return request_status.model_dump_json()
 
 
 def celery_run_workflow(context, request):
@@ -1096,17 +1160,6 @@ def make_fastapi_app(*, context: Optional[Dict[str, Any]] = None):
     return app
 
 
-@pytest.fixture
-def pytest_fixure_fastapi_app():
-    yield make_fastapi_app()
-
-
-@pytest.fixture
-def client(pytest_fixure_fastapi_app):
-    with TestClient(pytest_fixure_fastapi_app) as client:
-        yield client
-
-
 def background_task_celery_worker():
     # celery_app.worker_main(argv=["worker", "--loglevel=INFO"])
     celery_app.Worker().start()
@@ -1132,54 +1185,72 @@ def pytest_fixture_background_task_celery_worker():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "workflow",
+    "context,workflow",
     [
-        {
-            "jobs": {
-                "TEST_JOB": {
-                    "steps": [
-                        {
-                            "id": "greeting-step",
-                            "env": {
-                                "REPO_NAME": "${{ github.event.inputs.repo_name }}",
+        [
+            {
+                "extra_inits": [
+                    policy_engine_context_extra_init_secret_github_token_from_github_app,
+                    policy_engine_context_extra_init_secret_github_token_from_env,
+                ]
+            },
+            {
+                "jobs": {
+                    "TEST_JOB": {
+                        "steps": [
+                            {
+                                "id": "greeting-step",
+                                "env": {
+                                    "REPO_NAME": "${{ github.event.inputs.repo_name }}",
+                                },
+                                "run": "echo hello=$REPO_NAME | tee -a $GITHUB_OUTPUT",
                             },
-                            "run": "echo hello=$REPO_NAME | tee -a $GITHUB_OUTPUT",
-                        },
-                        {
-                            "uses": "actions/github-script@v7",
-                            "env": {
-                                "GREETING": "${{ steps.greeting-step.outputs.hello }}",
+                            {
+                                "uses": "actions/github-script@v7",
+                                "env": {
+                                    "GREETING": "${{ steps.greeting-step.outputs.hello }}",
+                                },
+                                "with": {
+                                    "script": 'console.log(`Hello ${process.env["GREETING"]}`)',
+                                },
                             },
-                            "with": {
-                                "script": 'console.log(`Hello ${process.env["GREETING"]}`)',
-                            },
-                        },
-                    ],
+                        ],
+                    },
                 },
             },
-        },
-        textwrap.dedent(
-            """
-            on:
-              push:
-                branches:
-                - main
+        ],
+        [
+            {
+                "extra_inits": [
+                    policy_engine_context_extra_init_secret_github_token_from_github_app,
+                    policy_engine_context_extra_init_secret_github_token_from_env,
+                ]
+            },
+            textwrap.dedent(
+                """
+                on:
+                  push:
+                    branches:
+                    - main
 
-            jobs:
-              test:
-                runs-on: self-hosted
-                steps:
-                - uses: actions/checkout@v4
-                - run: |
-                    echo Hello World
-            """
-        ),
+                jobs:
+                  test:
+                    runs-on: self-hosted
+                    steps:
+                    - uses: actions/checkout@v4
+                    - run: |
+                        echo Hello World
+                """
+            ),
+        ],
     ],
 )
 async def test_read_main(
-    client,
+    context,
     workflow,
 ):
+    app = make_fastapi_app(context=context)
+
     policy_engine_request = PolicyEngineRequest(
         inputs={
             "repo_name": "scitt-community/scitt-api-emulator",
@@ -1189,7 +1260,7 @@ async def test_read_main(
                 "env": {
                     "GITHUB_REPOSITORY": "scitt-community/scitt-api-emulator",
                     "GITHUB_API": "https://api.github.com/",
-                    "GITHUB_ACTOR": "aliceoa",
+                    "GITHUB_ACTOR": "pdxjohnny",
                     "GITHUB_ACTOR_ID": "1234567",
                 },
             },
@@ -1198,41 +1269,47 @@ async def test_read_main(
         workflow=workflow,
     )
     policy_engine_request_serialized = policy_engine_request.model_dump_json()
-    # Submit
-    response = client.put(
-        "/request/create", content=policy_engine_request_serialized
-    )
-    assert response.status_code == 200, json.dumps(response.json(), indent=4)
-    policy_engine_request_status = response.json()
-    assert (
-        PolicyEngineStatuses.SUBMITTED.value
-        == policy_engine_request_status["status"]
-    )
 
-    policy_engine_request_id = policy_engine_request_status["detail"]["id"]
-
-    # Check complete
-    for _ in range(0, 1000):
-        response = client.get(f"/request/status/{policy_engine_request_id}")
+    with TestClient(app) as client:
+        # Submit
+        response = client.put(
+            "/request/create", content=policy_engine_request_serialized
+        )
         assert response.status_code == 200, json.dumps(
             response.json(), indent=4
         )
         policy_engine_request_status = response.json()
+        assert (
+            PolicyEngineStatuses.SUBMITTED.value
+            == policy_engine_request_status["status"]
+        )
+
         policy_engine_request_id = policy_engine_request_status["detail"]["id"]
-        if (
-            PolicyEngineStatuses.IN_PROGRESS.value
-            != policy_engine_request_status["status"]
-        ):
-            break
-        time.sleep(5)
 
-    assert (
-        PolicyEngineStatuses.COMPLETE.value
-        == policy_engine_request_status["status"]
-    )
+        # Check complete
+        for _ in range(0, 1000):
+            response = client.get(f"/request/status/{policy_engine_request_id}")
+            assert response.status_code == 200, json.dumps(
+                response.json(), indent=4
+            )
+            policy_engine_request_status = response.json()
+            policy_engine_request_id = policy_engine_request_status["detail"][
+                "id"
+            ]
+            if (
+                PolicyEngineStatuses.IN_PROGRESS.value
+                != policy_engine_request_status["status"]
+            ):
+                break
+            time.sleep(5)
 
-    # Check completed results
-    policy_engine_request_completed = policy_engine_request_status["detail"]
+        assert (
+            PolicyEngineStatuses.COMPLETE.value
+            == policy_engine_request_status["status"]
+        )
+
+        # Check completed results
+        policy_engine_request_completed = policy_engine_request_status["detail"]
 
 
 class StandaloneApplication(gunicorn.app.base.BaseApplication):
@@ -1278,6 +1355,7 @@ def main():
         "--context-extra-inits",
         nargs="+",
         default=[
+            policy_engine_context_extra_init_secret_github_token_from_github_app,
             policy_engine_context_extra_init_secret_github_token_from_env,
         ],
         help=f"Entrypoint style paths for PolicyEngineContext.extra_inits",
