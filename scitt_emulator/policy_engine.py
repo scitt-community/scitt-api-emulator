@@ -71,7 +71,7 @@ In another terminal request exec via curl:
 
 ```bash
 jsonschema -i <(cat request.yml | python -c 'import json, yaml, sys; print(json.dumps(yaml.safe_load(sys.stdin.read()), indent=4, sort_keys=True))') <(python -c 'import json, scitt_emulator.policy_engine; print(json.dumps(scitt_emulator.policy_engine.PolicyEngineRequest.model_json_schema(), indent=4, sort_keys=True))')
-TASK_ID=$(curl -X PUT -H "Content-Type: application/json" -d @<(cat request.yml | sed -e "s/__GITHUB_TOKEN_FROM_ENV__/$(gh auth token)/g" | python -c 'import json, yaml, sys; print(json.dumps(yaml.safe_load(sys.stdin.read()), indent=4, sort_keys=True))') http://localhost:8080/request/create  | jq -r .detail.id)
+TASK_ID=$(curl -X POST -H "Content-Type: application/json" -d @<(cat request.yml | sed -e "s/__GITHUB_TOKEN_FROM_ENV__/$(gh auth token)/g" | python -c 'import json, yaml, sys; print(json.dumps(yaml.safe_load(sys.stdin.read()), indent=4, sort_keys=True))') http://localhost:8080/request/create  | jq -r .detail.id)
 curl http://localhost:8080/request/status/$TASK_ID | jq
 ```
 """
@@ -918,8 +918,17 @@ async def lifespan_github_app_gidgethub(
             event = sansio.Event.from_http(
                 request.headers, await request.body()
             )
-            print("GH delivery ID", event.delivery_id, file=sys.stderr)
-            await router.dispatch(event, request.app.state.gidgethub.gh)
+            # Copy context for this request
+            context = PolicyEngineContext.model_validate_json(
+                request.state.context.model_dump_json()
+            )
+            context.app = request.app
+            context.state = request.state
+            await router.dispatch(
+                event,
+                context.state.gidgethub.gh,
+                context,
+            )
 
     # NOTE SECURITY This token has permissions to all installations!!! Swap
     # it for a more finely scoped token next:
@@ -941,7 +950,41 @@ async def lifespan_github_app_gidgethub(
         }
 
 
-# TODO We need to async init lifespan callbacks and set context.app.state which
+async def gidgethub_get_access_token(context, request):
+    # Find installation ID associated with requesting actor to generated
+    # finer grained token
+    installation_id = None
+    async for data in context.state.gidgethub.gh.getiter(
+        "/app/installations",
+        jwt=context.state.gidgethub.danger_wide_permissions_token,
+    ):
+        if (
+            request.context["config"]["env"]["GITHUB_ACTOR"]
+            == data["account"]["login"]
+        ):
+            installation_id = data["id"]
+            break
+        elif request.context["config"]["env"]["GITHUB_REPOSITORY"].startswith(
+            data["account"]["login"] + "/"
+        ):
+            installation_id = data["id"]
+            break
+    if installation_id is None:
+        raise Exception(
+            f'App installation not found for GitHub Repository {request.context["config"]["env"]["GITHUB_REPOSITORY"]!r} or Actor {request.context["config"]["env"]["GITHUB_ACTOR"]!r}'
+        )
+
+    result = await gidgethub.apps.get_installation_access_token(
+        context.state.gidgethub.gh,
+        installation_id=installation_id,
+        app_id=context.state.gidgethub.app_id,
+        private_key=context.state.gidgethub.private_key,
+    )
+    result["installation"] = data
+    return result
+
+
+# TODO We need to async init lifespan callbacks and set context.state which
 # will be not serializable on initial entry into async_celery_run_workflow
 # @app.task(bind=True, base=MyTask)
 # https://celery.school/sqlalchemy-session-celery-tasks
@@ -949,38 +992,12 @@ async def policy_engine_context_extra_init_secret_github_token_from_github_app(
     context, request
 ):
     secrets = request.context["secrets"]
-    if "GITHUB_TOKEN" in secrets or not hasattr(context.app.state, "gidgethub"):
+    if "GITHUB_TOKEN" in secrets or not hasattr(context.state, "gidgethub"):
         return
 
-    # Find installation ID associated with requesting actor to generated
-    # finer grained token
-    installation_id = None
-    async for data in context.app.state.gidgethub.gh.getiter(
-        "/app/installations",
-        jwt=context.app.state.gidgethub.danger_wide_permissions_token,
-    ):
-        if (
-            request.context["config"]["env"]["GITHUB_ACTOR"]
-            == data["account"]["login"]
-        ):
-            installation_id = data["id"]
-        elif request.context["config"]["env"]["GITHUB_REPOSITORY"].startswith(
-            data["account"]["login"] + "/"
-        ):
-            installation_id = data["id"]
-    if installation_id is None:
-        raise Exception(
-            f'App installation not found for GitHub Repository {request.context["config"]["env"]["GITHUB_REPOSITORY"]!r} or Actor {request.context["config"]["env"]["GITHUB_ACTOR"]!r}'
-        )
-
-    access_token_response = await gidgethub.apps.get_installation_access_token(
-        context.app.state.gidgethub.gh,
-        installation_id=installation_id,
-        app_id=context.app.state.gidgethub.app_id,
-        private_key=context.app.state.gidgethub.private_key,
-    )
-
-    secrets["GITHUB_TOKEN"] = access_token_response["token"]
+    secrets["GITHUB_TOKEN"] = (
+        await gidgethub_get_access_token(context, request)
+    )["token"]
 
 
 def make_entrypoint_style_string(obj):
@@ -1045,6 +1062,7 @@ AnnotatedLifespanCallbackWithConfig = Annotated[
 
 class PolicyEngineContext(BaseModel, extra="forbid"):
     app: Optional[Any] = Field(exclude=True, default=None)
+    state: Optional[Any] = Field(exclude=True, default=None)
     lifespan: Union[
         List[Dict[str, Any]], List[AnnotatedLifespanCallbackWithConfig]
     ] = Field(
@@ -1100,24 +1118,15 @@ async def async_celery_run_workflow(context, request):
                 request.context["async_exit_stack"] = async_exit_stack
             if "exit_stack" not in request.context:
                 request.context["exit_stack"] = exit_stack
-            if (
-                context.app is None
-                or not hasattr(context.app, "state")
-                or not len(context.app.state)
-            ):
-                state = types.SimpleNamespace(
-                    **await request.context[
-                        "async_exit_stack"
-                    ].enter_async_context(
-                        startup_fastapi_app_policy_engine_context(
-                            fastapi_current_app.get()
-                            if int(os.environ.get("NO_CELERY", "0"))
-                            else celery_current_app,
-                            context,
-                        )
+            if context.app is None or context.state is None:
+                await request.context["async_exit_stack"].enter_async_context(
+                    startup_fastapi_app_policy_engine_context(
+                        fastapi_current_app.get()
+                        if int(os.environ.get("NO_CELERY", "0"))
+                        else celery_current_app,
+                        context,
                     )
                 )
-                context.app.state = state
             await celery_run_workflow_context_init(
                 context,
                 request,
@@ -1243,6 +1252,7 @@ async def startup_fastapi_app_policy_engine_context(
                     lifespan_callback(app, context)
                 )
             )
+        context.state = state
         yield state
 
 
@@ -1287,7 +1297,7 @@ def make_fastapi_app(
             )
         return request_status
 
-    @app.put("/request/create")
+    @app.post("/request/create")
     def route_request(
         request: PolicyEngineRequest,
         fastapi_request: Request,
@@ -1460,7 +1470,7 @@ async def test_read_main(
 
     with TestClient(app) as client:
         # Submit
-        response = client.put(
+        response = client.post(
             "/request/create", content=policy_engine_request_serialized
         )
         assert response.status_code == 200, json.dumps(
@@ -1525,272 +1535,79 @@ cache = cachetools.LRUCache(maxsize=500)
 # @router.register("check_run", action="rerequested")
 
 
-@router.register("check_suite", action="requested")
-# @router.register("push")
-# @router.register("pull_request", action="opened")
-# @router.register("pull_request", action="synchronize")
+# @router.register("check_suite", action="requested")
+@router.register("push")
+@router.register("pull_request", action="opened")
+@router.register("pull_request", action="synchronize")
 async def check_suite_requested_triggers_run_workflows(
-    event, gh, *arg, **kwargs
+    event,
+    gh,
+    context,
 ):
-    snoop.pp(event)
-    # pull_request = event.data["pull_request"]
-    # push = event.data["push"]
-    # await gh.post(pull_request["labels_url"], data=["needs review"])
+    github_actor = event.data["sender"]["login"]
+    github_repository = event.data["repository"]["full_name"]
+    request = PolicyEngineRequest(
+        context={
+            "config": {
+                "env": {
+                    "GITHUB_ACTOR": github_actor,
+                    "GITHUB_REPOSITORY": github_repository,
+                },
+            },
+        },
+        # TODO workflow router to specify which webhook trigger which workflows
+        workflow=textwrap.dedent(
+            """
+            on:
+              push:
+                branches:
+                - main
 
-
-event = {
-    "action": "requested",
-    "check_suite": {
-        "id": 21807775404,
-        "node_id": "CS_kwDOJQW3oM8AAAAFE9g-rA",
-        "head_branch": "policy_engine",
-        "head_sha": "fb43597076a07684c739d18277eec8d4828a3362",
-        "status": "queued",
-        "conclusion": None,
-        "url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/check-suites/21807775404",
-        "before": "cba79df088bf6cffa1c78d3b69ab279616b234fb",
-        "after": "fb43597076a07684c739d18277eec8d4828a3362",
-        "pull_requests": [],
-        "app": {
-            "id": 647627,
-            "slug": "alice-oa",
-            "node_id": "A_kwDOAFrL4c4ACeHL",
-            "owner": {
-                "login": "pdxjohnny",
-                "id": 5950433,
-                "node_id": "MDQ6VXNlcjU5NTA0MzM=",
-                "avatar_url": "https://avatars.githubusercontent.com/u/5950433?v=4",
-                "gravatar_id": "",
-                "url": "https://api.github.com/users/pdxjohnny",
-                "html_url": "https://github.com/pdxjohnny",
-                "followers_url": "https://api.github.com/users/pdxjohnny/followers",
-                "following_url": "https://api.github.com/users/pdxjohnny/following{/other_user}",
-                "gists_url": "https://api.github.com/users/pdxjohnny/gists{/gist_id}",
-                "starred_url": "https://api.github.com/users/pdxjohnny/starred{/owner}{/repo}",
-                "subscriptions_url": "https://api.github.com/users/pdxjohnny/subscriptions",
-                "organizations_url": "https://api.github.com/users/pdxjohnny/orgs",
-                "repos_url": "https://api.github.com/users/pdxjohnny/repos",
-                "events_url": "https://api.github.com/users/pdxjohnny/events{/privacy}",
-                "received_events_url": "https://api.github.com/users/pdxjohnny/received_events",
-                "type": "User",
-                "site_admin": False,
-            },
-            "name": "Alice OA",
-            "description": "",
-            "external_url": "https://alice.chadig.com",
-            "html_url": "https://github.com/apps/alice-oa",
-            "created_at": "2023-11-23T14:33:00Z",
-            "updated_at": "2023-11-23T14:33:44Z",
-            "permissions": {
-                "actions": "write",
-                "checks": "write",
-                "contents": "write",
-                "deployments": "write",
-                "discussions": "write",
-                "issues": "write",
-                "metadata": "read",
-                "organization_actions_variables": "write",
-                "organization_custom_properties": "write",
-                "organization_custom_roles": "read",
-                "organization_events": "read",
-                "organization_self_hosted_runners": "write",
-                "pages": "write",
-                "pull_requests": "write",
-                "statuses": "write",
-                "workflows": "write",
-            },
-            "events": [
-                "check_run",
-                "check_suite",
-                "commit_comment",
-                "create",
-                "custom_property",
-                "custom_property_values",
-                "delete",
-                "deployment",
-                "deployment_protection_rule",
-                "deployment_review",
-                "deployment_status",
-                "deploy_key",
-                "discussion",
-                "discussion_comment",
-                "fork",
-                "gollum",
-                "issues",
-                "issue_comment",
-                "label",
-                "merge_queue_entry",
-                "milestone",
-                "page_build",
-                "public",
-                "pull_request",
-                "pull_request_review",
-                "pull_request_review_comment",
-                "pull_request_review_thread",
-                "push",
-                "release",
-                "repository",
-                "repository_dispatch",
-                "star",
-                "status",
-                "watch",
-                "workflow_dispatch",
-                "workflow_job",
-                "workflow_run",
-            ],
-        },
-        "created_at": "2024-03-17T15:55:31Z",
-        "updated_at": "2024-03-17T15:55:31Z",
-        "rerequestable": True,
-        "runs_rerequestable": True,
-        "latest_check_runs_count": 0,
-        "check_runs_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/check-suites/21807775404/check-runs",
-        "head_commit": {
-            "id": "fb43597076a07684c739d18277eec8d4828a3362",
-            "tree_id": "d290beff5cd229ddff5c8e20ec26b478d6b82ab9",
-            "message": "GitHub App style token issuance\n\nSigned-off-by: John Andersen <johnandersenpdx@gmail.com>",
-            "timestamp": "2024-03-17T15:55:25Z",
-            "author": {
-                "name": "John Andersen",
-                "email": "johnandersenpdx@gmail.com",
-            },
-            "committer": {
-                "name": "John Andersen",
-                "email": "johnandersenpdx@gmail.com",
-            },
-        },
-    },
-    "repository": {
-        "id": 621131680,
-        "node_id": "R_kgDOJQW3oA",
-        "name": "scitt-api-emulator",
-        "full_name": "pdxjohnny/scitt-api-emulator",
-        "private": False,
-        "owner": {
-            "login": "pdxjohnny",
-            "id": 5950433,
-            "node_id": "MDQ6VXNlcjU5NTA0MzM=",
-            "avatar_url": "https://avatars.githubusercontent.com/u/5950433?v=4",
-            "gravatar_id": "",
-            "url": "https://api.github.com/users/pdxjohnny",
-            "html_url": "https://github.com/pdxjohnny",
-            "followers_url": "https://api.github.com/users/pdxjohnny/followers",
-            "following_url": "https://api.github.com/users/pdxjohnny/following{/other_user}",
-            "gists_url": "https://api.github.com/users/pdxjohnny/gists{/gist_id}",
-            "starred_url": "https://api.github.com/users/pdxjohnny/starred{/owner}{/repo}",
-            "subscriptions_url": "https://api.github.com/users/pdxjohnny/subscriptions",
-            "organizations_url": "https://api.github.com/users/pdxjohnny/orgs",
-            "repos_url": "https://api.github.com/users/pdxjohnny/repos",
-            "events_url": "https://api.github.com/users/pdxjohnny/events{/privacy}",
-            "received_events_url": "https://api.github.com/users/pdxjohnny/received_events",
-            "type": "User",
-            "site_admin": False,
-        },
-        "html_url": "https://github.com/pdxjohnny/scitt-api-emulator",
-        "description": "SCITT API Emulator",
-        "fork": True,
-        "url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator",
-        "forks_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/forks",
-        "keys_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/keys{/key_id}",
-        "collaborators_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/collaborators{/collaborator}",
-        "teams_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/teams",
-        "hooks_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/hooks",
-        "issue_events_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/issues/events{/number}",
-        "events_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/events",
-        "assignees_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/assignees{/user}",
-        "branches_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/branches{/branch}",
-        "tags_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/tags",
-        "blobs_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/git/blobs{/sha}",
-        "git_tags_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/git/tags{/sha}",
-        "git_refs_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/git/refs{/sha}",
-        "trees_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/git/trees{/sha}",
-        "statuses_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/statuses/{sha}",
-        "languages_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/languages",
-        "stargazers_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/stargazers",
-        "contributors_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/contributors",
-        "subscribers_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/subscribers",
-        "subscription_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/subscription",
-        "commits_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/commits{/sha}",
-        "git_commits_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/git/commits{/sha}",
-        "comments_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/comments{/number}",
-        "issue_comment_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/issues/comments{/number}",
-        "contents_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/contents/{+path}",
-        "compare_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/compare/{base}...{head}",
-        "merges_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/merges",
-        "archive_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/{archive_format}{/ref}",
-        "downloads_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/downloads",
-        "issues_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/issues{/number}",
-        "pulls_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/pulls{/number}",
-        "milestones_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/milestones{/number}",
-        "notifications_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/notifications{?since,all,participating}",
-        "labels_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/labels{/name}",
-        "releases_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/releases{/id}",
-        "deployments_url": "https://api.github.com/repos/pdxjohnny/scitt-api-emulator/deployments",
-        "created_at": "2023-03-30T03:43:27Z",
-        "updated_at": "2023-09-12T21:02:36Z",
-        "pushed_at": "2024-03-17T15:55:29Z",
-        "git_url": "git://github.com/pdxjohnny/scitt-api-emulator.git",
-        "ssh_url": "git@github.com:pdxjohnny/scitt-api-emulator.git",
-        "clone_url": "https://github.com/pdxjohnny/scitt-api-emulator.git",
-        "svn_url": "https://github.com/pdxjohnny/scitt-api-emulator",
-        "homepage": "https://scitt-community.github.io/scitt-api-emulator",
-        "size": 290,
-        "stargazers_count": 0,
-        "watchers_count": 0,
-        "language": "Python",
-        "has_issues": False,
-        "has_projects": True,
-        "has_downloads": True,
-        "has_wiki": True,
-        "has_pages": False,
-        "has_discussions": False,
-        "forks_count": 0,
-        "mirror_url": None,
-        "archived": False,
-        "disabled": False,
-        "open_issues_count": 1,
-        "license": {
-            "key": "mit",
-            "name": "MIT License",
-            "spdx_id": "MIT",
-            "url": "https://api.github.com/licenses/mit",
-            "node_id": "MDc6TGljZW5zZTEz",
-        },
-        "allow_forking": True,
-        "is_template": False,
-        "web_commit_signoff_required": True,
-        "topics": [],
-        "visibility": "public",
-        "forks": 0,
-        "open_issues": 1,
-        "watchers": 0,
-        "default_branch": "auth",
-    },
-    "sender": {
-        "login": "pdxjohnny",
-        "id": 5950433,
-        "node_id": "MDQ6VXNlcjU5NTA0MzM=",
-        "avatar_url": "https://avatars.githubusercontent.com/u/5950433?v=4",
-        "gravatar_id": "",
-        "url": "https://api.github.com/users/pdxjohnny",
-        "html_url": "https://github.com/pdxjohnny",
-        "followers_url": "https://api.github.com/users/pdxjohnny/followers",
-        "following_url": "https://api.github.com/users/pdxjohnny/following{/other_user}",
-        "gists_url": "https://api.github.com/users/pdxjohnny/gists{/gist_id}",
-        "starred_url": "https://api.github.com/users/pdxjohnny/starred{/owner}{/repo}",
-        "subscriptions_url": "https://api.github.com/users/pdxjohnny/subscriptions",
-        "organizations_url": "https://api.github.com/users/pdxjohnny/orgs",
-        "repos_url": "https://api.github.com/users/pdxjohnny/repos",
-        "events_url": "https://api.github.com/users/pdxjohnny/events{/privacy}",
-        "received_events_url": "https://api.github.com/users/pdxjohnny/received_events",
-        "type": "User",
-        "site_admin": False,
-    },
-    "installation": {
-        "id": 44340847,
-        "node_id": "MDIzOkludGVncmF0aW9uSW5zdGFsbGF0aW9uNDQzNDA4NDc=",
-    },
-}
+            jobs:
+              test:
+                runs-on: self-hosted
+                steps:
+                - uses: actions/checkout@v4
+                - run: |
+                    echo Hello World
+            """
+        ),
+    )
+    access_token_response = await gidgethub_get_access_token(context, request)
+    # access_token_response["installation"] contains installation info
+    installation_jwt = access_token_response["token"]
+    with snoop():
+        snoop.pp(event.event)
+        if event.event == "push":
+            full_name = event.data["repository"]["full_name"]
+            url = f"https://api.github.com/repos/{full_name}/check-runs"
+            task_id = str(
+                task_celery_run_workflow.delay(
+                    context.model_dump_json(),
+                    request.model_dump_json(),
+                    # TODO Callback with results when complete
+                    # link=
+                ).id
+            )
+            data = {
+                "name": "mighty_readme",
+                "head_sha": event.data["after"],
+                "status": "in_progress",
+                "external_id": task_id,
+                "started_at": "2018-05-04T01:14:52Z",
+                "output": {
+                    "title": "Mighty Readme report",
+                    "summary": "",
+                    "text": "",
+                },
+            }
+            result = await gh.post(url, data=data, jwt=installation_jwt)
+            snoop.pp(result)
+        elif event.event == "pull_request":
+            pass
+            pull_request = event.data["pull_request"]
+        # pull_request = event.data["pull_request"]
+        # push = event.data["push"]
 
 
 @pytest.mark.asyncio
@@ -1800,21 +1617,6 @@ async def test_check_suite_requested_triggers_run_workflows():
 
 
 """
-curl -L \
-  -X POST \
-  -H "Accept: application/vnd.github+json" \
-  -H "Authorization: Bearer <YOUR-TOKEN>" \
-  -H "X-GitHub-Api-Version: 2022-11-28" \
-  https://api.github.com/repos/OWNER/REPO/check-runs
-{
-    "name": "mighty_readme",
-    "head_sha": "fb43597076a07684c739d18277eec8d4828a3362",
-    "status": "in_progress",
-    "external_id": task_id,
-    "started_at": "2018-05-04T01:14:52Z",
-    "output": {"title": "Mighty Readme report", "summary": "", "text": ""},
-}
-
 curl -L \
   -X PATCH \
   -H "Accept: application/vnd.github+json" \
