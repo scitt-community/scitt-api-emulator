@@ -3,9 +3,38 @@
 Implement GitHub Actions workflow evaluation as step towards workflow based
 policy engine. TODO Receipts with attestations for SLSA L4.
 
-Testing:
+Testing with token auth (fine grained tokens required for status checks):
 
 NO_CELERY=1 GITHUB_TOKEN=$(gh auth token) nodemon -e py --exec 'clear; python -m pytest -s -vv scitt_emulator/policy_engine.py; test 1'
+
+Testing with GitHub App auth:
+
+LIFESPAN_CONFIG_1=github_app.yaml LIFESPAN_CALLBACK_1=scitt_emulator.policy_engine:lifespan_github_app_gidgethub nodemon -e py --exec 'clear; pytest -s -vv scitt_emulator/policy_engine.py; test 1'
+
+**github_app.yaml**
+
+```yaml
+app_id: 1234567
+private_key: |
+  -----BEGIN RSA PRIVATE KEY-----
+  AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+  AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==
+  -----END RSA PRIVATE KEY-----
+```
+
+Usage with Celery:
+
+Terminal 1:
+
+```bash
+nodemon --signal SIGKILL -e py --exec 'clear; ./scitt_emulator/policy_engine.py --lifespan scitt_emulator.policy_engine:lifespan_github_app_gidgethub github_app.yaml api --workers 1 --bind 0.0.0.0:8080; test 1'
+```
+
+Terminal 2:
+
+nodemon -e py --exec 'clear; ./scitt_emulator/policy_engine.py --lifespan scitt_emulator.policy_engine:lifespan_github_app_gidgethub github_app.yaml worker; test 1'
+
+Usage without Celery:
 
 Terminal 1:
 
@@ -38,11 +67,12 @@ workflow: |
       - uses: actions/checkout@v4
 ```
 
-Terminal 2:
+In another terminal request exec via curl:
 
 ```bash
 jsonschema -i <(cat request.yml | python -c 'import json, yaml, sys; print(json.dumps(yaml.safe_load(sys.stdin.read()), indent=4, sort_keys=True))') <(python -c 'import json, scitt_emulator.policy_engine; print(json.dumps(scitt_emulator.policy_engine.PolicyEngineRequest.model_json_schema(), indent=4, sort_keys=True))')
-curl -X PUT -H "Content-Type: application/json" -d @<(cat request.yml | sed -e "s/__GITHUB_TOKEN_FROM_ENV__/$(gh auth token)/g" | python -c 'import json, yaml, sys; print(json.dumps(yaml.safe_load(sys.stdin.read()), indent=4, sort_keys=True))') http://localhost:8080/request/create | jq
+TASK_ID=$(curl -X PUT -H "Content-Type: application/json" -d @<(cat request.yml | sed -e "s/__GITHUB_TOKEN_FROM_ENV__/$(gh auth token)/g" | python -c 'import json, yaml, sys; print(json.dumps(yaml.safe_load(sys.stdin.read()), indent=4, sort_keys=True))') http://localhost:8080/request/create  | jq -r .detail.id)
+curl http://localhost:8080/request/status/$TASK_ID | jq
 ```
 """
 import os
@@ -70,7 +100,17 @@ import contextvars
 import urllib.request
 import multiprocessing
 import concurrent.futures
-from typing import Union, Callable, Optional, Tuple, List, Dict, Any, Annotated
+from typing import (
+    Union,
+    Callable,
+    Optional,
+    Tuple,
+    List,
+    Dict,
+    Any,
+    Annotated,
+    Self,
+)
 
 
 import yaml
@@ -247,7 +287,10 @@ class PolicyEngineRequest(BaseModel, extra="forbid"):
 
 
 celery_app = Celery(
-    "tasks", backend="redis://localhost", broker="redis://localhost"
+    "tasks",
+    backend="redis://localhost",
+    broker="redis://localhost",
+    broker_connection_retry_on_startup=True,
 )
 
 
@@ -594,7 +637,6 @@ def step_io_output_github_actions(context, request):
     }
 
 
-@snoop
 def step_io_update_stack_output_and_env_github_actions(context, request, step):
     stack = request.context["stack"][-1]
     outputs = step_parse_outputs_github_actions(
@@ -614,7 +656,6 @@ def step_io_update_stack_output_and_env_github_actions(context, request, step):
     stack["env"].update(context_env_updates)
 
 
-@snoop
 def execute_step_uses(context, request, step):
     stack = request.context["stack"][-1]
 
@@ -634,7 +675,6 @@ def execute_step_uses(context, request, step):
     if action_yaml_obj["runs"]["using"].startswith("node"):
         env = copy.deepcopy(os.environ)
         env.update(stack["env"])
-        snoop.pp(stack["env"])
         tee_proc = subprocess.Popen(["tee", stack["console_output"]])
         try:
             completed_proc = subprocess.run(
@@ -687,7 +727,6 @@ def execute_step_uses_org_repo_at_version(context, request, step):
     execute_step_uses(context, request, step)
 
 
-@snoop
 def execute_step_run(context, request, step):
     stack = request.context["stack"][-1]
     stack["env"].update(step_io_output_github_actions(context, request))
@@ -709,7 +748,6 @@ def execute_step_run(context, request, step):
 
     env = copy.deepcopy(os.environ)
     env.update(stack["env"])
-    snoop.pp(stack["env"])
     tee_proc = subprocess.Popen(["tee", stack["console_output"]])
     try:
         completed_proc = subprocess.run(
@@ -731,7 +769,6 @@ def execute_step_run(context, request, step):
     )
 
 
-@snoop
 def execute_step(context, request, step):
     old_stack = request.context["stack"][-1]
     stack = celery_run_workflow_context_stack_make_new(context, request)
@@ -770,7 +807,6 @@ def celery_run_workflow_context_stack_make_new(context, request):
         "workspace": old_stack["workspace"],
         "env": copy.deepcopy(old_stack["env"]),
     }
-    snoop.pp(stack["env"])
     return stack
 
 
@@ -868,7 +904,7 @@ def policy_engine_context_extra_init_secret_github_token_from_env(
 async def lifespan_github_app_gidgethub(
     config_string,
     app,
-    context,
+    _context,
 ):
     config = yaml.safe_load(
         pathlib.Path(config_string).expanduser().read_text()
@@ -883,23 +919,24 @@ async def lifespan_github_app_gidgethub(
                 request.headers, await request.body()
             )
             print("GH delivery ID", event.delivery_id, file=sys.stderr)
-            await router.dispatch(event, gh)
-
-    app_id = config["app_id"]
-    private_key = config["private_key"]
+            await router.dispatch(event, request.app.state.gidgethub.gh)
 
     # NOTE SECURITY This token has permissions to all installations!!! Swap
     # it for a more finely scoped token next:
-    danger_wide_permissions_token = gidgethub.apps.get_jwt(
-        app_id=app_id,
-        private_key=private_key,
+    config["danger_wide_permissions_token"] = gidgethub.apps.get_jwt(
+        app_id=config["app_id"],
+        private_key=config["private_key"],
     )
+
     async with aiohttp.ClientSession(trust_env=True) as session:
         yield {
-            "gh": gidgethub.aiohttp.GitHubAPI(
-                session,
-                # TODO Change actor
-                "pdxjohnny",
+            "gidgethub": types.SimpleNamespace(
+                gh=gidgethub.aiohttp.GitHubAPI(
+                    session,
+                    # TODO Change actor
+                    "pdxjohnny",
+                ),
+                **config,
             )
         }
 
@@ -912,17 +949,15 @@ async def policy_engine_context_extra_init_secret_github_token_from_github_app(
     context, request
 ):
     secrets = request.context["secrets"]
-    if "GITHUB_TOKEN" in secrets or not hasattr(context.app.state, "gh"):
+    if "GITHUB_TOKEN" in secrets or not hasattr(context.app.state, "gidgethub"):
         return
-
-    gh = context.app.state.gh
 
     # Find installation ID associated with requesting actor to generated
     # finer grained token
     installation_id = None
-    async for data in gh.getiter(
+    async for data in context.app.state.gidgethub.gh.getiter(
         "/app/installations",
-        jwt=danger_wide_permissions_token,
+        jwt=context.app.state.gidgethub.danger_wide_permissions_token,
     ):
         if (
             request.context["config"]["env"]["GITHUB_ACTOR"]
@@ -935,23 +970,63 @@ async def policy_engine_context_extra_init_secret_github_token_from_github_app(
             installation_id = data["id"]
     if installation_id is None:
         raise Exception(
-            f'App installation not found for GitHub Actor {request.context["config"]["env"]["GITHUB_ACTOR"]!r}'
+            f'App installation not found for GitHub Repository {request.context["config"]["env"]["GITHUB_REPOSITORY"]!r} or Actor {request.context["config"]["env"]["GITHUB_ACTOR"]!r}'
         )
 
     access_token_response = await gidgethub.apps.get_installation_access_token(
-        gh,
+        context.app.state.gidgethub.gh,
         installation_id=installation_id,
-        app_id=app_id,
-        private_key=private_key,
+        app_id=context.app.state.gidgethub.app_id,
+        private_key=context.app.state.gidgethub.private_key,
     )
 
     secrets["GITHUB_TOKEN"] = access_token_response["token"]
 
 
+def make_entrypoint_style_string(obj):
+    """
+    Celery gets confused about import paths when os.exec()'d due to __main__.
+    This fixes that by finding what package this file is within via path
+    traversal of directories up the tree until no __init__.py file is found.
+    """
+    module_name = inspect.getmodule(obj).__name__
+    file_path = pathlib.Path(__file__)
+    module_path = [file_path.stem]
+    if module_name == "__main__":
+        module_in_dir_path = file_path.parent
+        while module_in_dir_path.joinpath("__init__.py").exists():
+            module_path.append(module_in_dir_path.stem)
+            module_in_dir_path = module_in_dir_path.parent
+        module_name = ".".join(module_path[::-1])
+    return f"{module_name}:{obj.__name__}"
+
+
+class LifespanCallbackWithConfig(BaseModel):
+    entrypoint_string: Optional[str] = None
+    config_string: Optional[str] = None
+    callback: Optional[Callable] = Field(exclude=True, default=None)
+
+    @model_validator(mode="after")
+    def load_callback_or_set_entrypoint_string(self) -> Self:
+        if self.callback and self.config_string:
+            self.entrypoint_string = f"{make_entrypoint_style_string(self.callback)}:{self.config_string}"
+        elif self.entrypoint_string and self.config_string:
+            self.callback = list(entrypoint_style_load(self.entrypoint_string))[
+                0
+            ]
+        else:
+            raise ValueError(
+                "Must specify either (entrypoint_string and config_string) or (callback and config_string) via kwargs"
+            )
+
+    def __call__(self, *args, **kwargs):
+        return self.callback(self.config_string, *args, **kwargs)
+
+
 AnnotatedEntrypoint = Annotated[
     Callable,
     PlainSerializer(
-        lambda obj: f"{inspect.getmodule(obj).__name__}:{obj.__name__}"
+        lambda obj: make_entrypoint_style_string(obj)
         if obj is not None and inspect.getmodule(obj) is not None
         else obj,
         return_type=str,
@@ -959,8 +1034,22 @@ AnnotatedEntrypoint = Annotated[
 ]
 
 
+AnnotatedLifespanCallbackWithConfig = Annotated[
+    Callable,
+    PlainSerializer(
+        lambda obj: obj.model_dump() if obj is not None else obj,
+        return_type=dict,
+    ),
+]
+
+
 class PolicyEngineContext(BaseModel, extra="forbid"):
     app: Optional[Any] = Field(exclude=True, default=None)
+    lifespan: Union[
+        List[Dict[str, Any]], List[AnnotatedLifespanCallbackWithConfig]
+    ] = Field(
+        default_factory=lambda: [],
+    )
     extra_inits: Union[List[str], List[AnnotatedEntrypoint]] = Field(
         default_factory=lambda: [],
     )
@@ -980,23 +1069,27 @@ class PolicyEngineContext(BaseModel, extra="forbid"):
             ]
         )
 
+    @field_validator("lifespan")
+    @classmethod
+    def parse_lifespan(cls, lifespan, _info):
+        return list(
+            [
+                lifespan_callback
+                if isinstance(lifespan_callback, LifespanCallbackWithConfig)
+                else LifespanCallbackWithConfig(**lifespan_callback)
+                for lifespan_callback in lifespan
+            ]
+        )
+
 
 fastapi_current_app = contextvars.ContextVar("fastapi_current_app")
 
 
 async def async_celery_run_workflow(context, request):
-    snoop.pp(context)
     if isinstance(context, str):
         context = PolicyEngineContext.model_validate_json(context)
-    snoop.pp(context)
-    if "NO_CELERY" in os.environ:
-        context.app = fastapi_current_app.get()
-    else:
-        context.app = celery_current_app
-    snoop.pp(request)
     if isinstance(request, str):
         request = PolicyEngineRequest.model_validate_json(request)
-    snoop.pp(request)
     stack = request.stack
 
     workflow = request.workflow
@@ -1007,6 +1100,24 @@ async def async_celery_run_workflow(context, request):
                 request.context["async_exit_stack"] = async_exit_stack
             if "exit_stack" not in request.context:
                 request.context["exit_stack"] = exit_stack
+            if (
+                context.app is None
+                or not hasattr(context.app, "state")
+                or not len(context.app.state)
+            ):
+                state = types.SimpleNamespace(
+                    **await request.context[
+                        "async_exit_stack"
+                    ].enter_async_context(
+                        startup_fastapi_app_policy_engine_context(
+                            fastapi_current_app.get()
+                            if int(os.environ.get("NO_CELERY", "0"))
+                            else celery_current_app,
+                            context,
+                        )
+                    )
+                )
+                context.app.state = state
             await celery_run_workflow_context_init(
                 context,
                 request,
@@ -1022,8 +1133,6 @@ async def async_celery_run_workflow(context, request):
                 # TODO Kick off jobs in parallel / dep matrix
                 for step in job.steps:
                     execute_step(context, request, step)
-            snoop.pp(stack)
-            snoop.pp(request.context["stack"][-1]["outputs"])
 
         detail = PolicyEngineComplete(
             id="",
@@ -1079,7 +1188,6 @@ def no_celery_task(func):
     return func
 
 
-@snoop
 def no_celery_try_set_state(state):
     future = state["future"]
     if not future.done():
@@ -1120,33 +1228,32 @@ if "NO_CELERY" in os.environ:
 async def startup_fastapi_app_policy_engine_context(
     app,
     context: Optional[Dict[str, Any]] = None,
-    lifespan: Callable[FastAPI, Dict[str, Any]] = None,
 ):
     state = {}
     if context is None:
         context = {}
+    if not isinstance(context, PolicyEngineContext):
+        context = PolicyEngineContext.model_validate(context)
+    context.app = app
+    state["context"] = context
     async with contextlib.AsyncExitStack() as async_exit_stack:
-        if lifespan is not None:
-            for lifespan_callback in lifespan:
-                state.update(
-                    async_exit_stack.enter_async_context(
-                        lifespan_callback(app, context)
-                    )
+        for lifespan_callback in context.lifespan:
+            state.update(
+                await async_exit_stack.enter_async_context(
+                    lifespan_callback(app, context)
                 )
-    state["context"] = PolicyEngineContext.model_validate(context)
-    yield state
+            )
+        yield state
 
 
 def make_fastapi_app(
     *,
     context: Optional[Dict[str, Any]] = None,
-    lifespan: Callable[FastAPI, Dict[str, Any]] = None,
 ):
     app = FastAPI(
         lifespan=lambda app: startup_fastapi_app_policy_engine_context(
             app,
             context,
-            lifespan=lifespan,
         ),
     )
 
@@ -1167,7 +1274,6 @@ def make_fastapi_app(
             )
         elif request_task.state in ("SUCCESS", "FAILURE"):
             status_json_string = request_task.get()
-            snoop.pp(status_json_string)
             status = json.loads(status_json_string)
             detail_class = DETAIL_CLASS_MAPPING[status["status"]]
             status["detail"] = detail_class(**status["detail"])
@@ -1179,8 +1285,6 @@ def make_fastapi_app(
                     id=request_id,
                 ),
             )
-        snoop.pp(request_task.__dict__)
-        snoop.pp(request_status)
         return request_status
 
     @app.put("/request/create")
@@ -1201,33 +1305,42 @@ def make_fastapi_app(
                 ),
             ),
         )
-        snoop.pp(request_status)
         return request_status
 
     return app
 
 
-DEFAULT_LIFESPAN_CALLBACKS = list(
-    [
-        LifespanCallbackWithConfig(value)
-        for key, value in os.environ.items()
-        if key.startswith("LIFESPAN_")
-    ]
-)
+DEFAULT_LIFESPAN_CALLBACKS = []
+for callback_key, entrypoint_string in os.environ.items():
+    if not callback_key.startswith("LIFESPAN_CALLBACK_"):
+        continue
+    config_key = callback_key.replace("CALLBACK", "CONFIG", 1)
+    if not config_key in os.environ:
+        raise Exception(
+            f"{callback_key} set in environment. {config_key} required but not found."
+        )
+    DEFAULT_LIFESPAN_CALLBACKS.append(
+        LifespanCallbackWithConfig(
+            entrypoint_string=entrypoint_string,
+            config_string=os.environ[config_key],
+        )
+    )
 
 
 async def background_task_celery_worker():
     # celery_app.worker_main(argv=["worker", "--loglevel=INFO"])
-    async with startup_fastapi_app_policy_engine_context(
-        celery_app,
-        PolicyEngineContext(),
-        lifespan=DEFAULT_LIFESPAN_CALLBACKS,
-    ) as state:
-        celery_app.state = state
-    celery_app.Worker().start()
+    celery_app.tasks["tasks.celery_run_workflow"] = task_celery_run_workflow
+    celery_app.Worker(app=celery_app).start()
 
 
-CELERY_WORKER_EXEC_WITH_PYTHON = r"import asyncio, nest_asyncio, scitt_emulator.policy_engine; nest_asyncio.apply(); asyncio.run(scitt_emulator.policy_engine.background_task_celery_worker())"
+CELERY_WORKER_EXEC_WITH_PYTHON = r"import scitt_emulator.policy_engine; scitt_emulator.policy_engine.celery_worker_exec_with_python()"
+
+
+def celery_worker_exec_with_python():
+    import nest_asyncio
+
+    nest_asyncio.apply()
+    asyncio.run(background_task_celery_worker())
 
 
 @contextlib.contextmanager
@@ -1261,10 +1374,11 @@ def pytest_fixture_background_task_celery_worker():
     [
         [
             {
+                "lifespan": DEFAULT_LIFESPAN_CALLBACKS,
                 "extra_inits": [
                     policy_engine_context_extra_init_secret_github_token_from_github_app,
                     policy_engine_context_extra_init_secret_github_token_from_env,
-                ]
+                ],
             },
             {
                 "jobs": {
@@ -1293,10 +1407,11 @@ def pytest_fixture_background_task_celery_worker():
         ],
         [
             {
+                "lifespan": DEFAULT_LIFESPAN_CALLBACKS,
                 "extra_inits": [
                     policy_engine_context_extra_init_secret_github_token_from_github_app,
                     policy_engine_context_extra_init_secret_github_token_from_env,
-                ]
+                ],
             },
             textwrap.dedent(
                 """
@@ -1769,49 +1884,34 @@ class StandaloneApplication(gunicorn.app.base.BaseApplication):
         return self.application
 
 
-class LifespanCallbackWithConfig:
-    def __init__(
-        self, entrypoint_string=None, *, callback=None, config_string=None
-    ):
-        if callback and config_string:
-            self.callback = callback
-            self.config_string = config_string
-        elif entrypoint_string:
-            entrypoint_string_split = entrypoint_string.split(":", maxsplit=2)
-            self.callback = list(
-                entrypoint_style_load(":".join(entrypoint_string_split[:1]))
-            )[0]
-            self.config_string = entrypoint_string_split[-1]
-        else:
-            raise ValueError("Must specify via kwargs")
-
-    async def __call__(self, *args, **kwargs):
-        return await self.callback(self.config_string, *args, **kwargs)
-
-    def __str__(self):
-        lambda obj: f"{inspect.getmodule(self.callback).__name__}:{self.callback.__name__}:{self.config_string}"
-
-
 def cli_worker(args):
-    with subprocess_celery_worker(
+    os.execvpe(
+        sys.executable,
+        [
+            sys.executable,
+            "-c",
+            CELERY_WORKER_EXEC_WITH_PYTHON,
+        ],
         env={
             **os.environ,
             **{
-                f"{LIFESPAN_}": lifespan_callback
-                for lifespan_callback in args.lifespan
+                f"LIFESPAN_CALLBACK_{i}": lifespan_callback.entrypoint_string
+                for i, lifespan_callback in enumerate(args.lifespan)
             },
-        }
-    ):
-        while True:
-            time.sleep(86400)
+            **{
+                f"LIFESPAN_CONFIG_{i}": lifespan_callback.config_string
+                for i, lifespan_callback in enumerate(args.lifespan)
+            },
+        },
+    )
 
 
 def cli_api(args):
     app = make_fastapi_app(
         context={
             "extra_inits": args.request_context_extra_inits,
+            "lifespan": args.lifespan,
         },
-        lifespan=args.lifespan,
     )
     options = {
         "bind": args.bind,
@@ -1829,12 +1929,14 @@ def cli():
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter
     )
     subparsers = parser.add_subparsers(help="sub-command help")
+    parser.set_defaults(func=lambda _: None)
     parser.add_argument(
         "--lifespan",
-        type=LifespanCallbackWithConfig,
-        nargs="+",
+        nargs=2,
+        action="append",
+        metavar=("entrypoint", "config"),
         default=DEFAULT_LIFESPAN_CALLBACKS,
-        help=f"entrypoint.style:path:~/path/to/assocaited/config.json for FastAPI lifespan generators",
+        help=f"entrypoint.style:path ~/path/to/assocaited/config.json for startup and shutdown async context managers. Yield from to set fastapi|celery.app.state",
     )
 
     parser_worker = subparsers.add_parser("worker", help="Run Celery worker")
@@ -1864,6 +1966,16 @@ def cli():
     )
 
     args = parser.parse_args()
+
+    args.lifespan = list(
+        map(
+            lambda arg: LifespanCallbackWithConfig(
+                entrypoint_string=arg[0],
+                config_string=arg[1],
+            ),
+            args.lifespan,
+        )
+    )
 
     args.func(args)
 
