@@ -92,6 +92,7 @@ import inspect
 import argparse
 import tempfile
 import textwrap
+import datetime
 import traceback
 import itertools
 import subprocess
@@ -243,6 +244,7 @@ class PolicyEngineWorkflowJob(BaseModel, extra="forbid"):
 
 
 class PolicyEngineWorkflow(BaseModel, extra="forbid"):
+    name: Optional[str] = None
     on: Union[List[str], Dict[str, Any]] = Field(
         default_factory=lambda: [],
     )
@@ -292,6 +294,148 @@ celery_app = Celery(
     broker="redis://localhost",
     broker_connection_retry_on_startup=True,
 )
+
+
+def number_of_workers():
+    return (multiprocessing.cpu_count() * 2) + 1
+
+
+def _no_celery_task(func, bind=False, no_celery_async=None):
+    async def asyncio_delay(*args):
+        nonlocal bind
+        nonlocal no_celery_async
+        if no_celery_async is None:
+            raise Exception(
+                "Must specify async def version of task via @celery_task decorator keyword argument no_celery_async"
+            )
+        task_id = str(uuid.uuid4())
+        if bind:
+            mock_celery_task_bind_self = types.SimpleNamespace(
+                request=types.SimpleNamespace(
+                    id=task_id,
+                )
+            )
+            args = [mock_celery_task_bind_self] + list(args)
+        task = asyncio.create_task(no_celery_async(*args))
+
+        async def async_no_celery_try_set_state(task_id):
+            request = fastapi_current_request.get()
+            async with request.state.no_celery_async_results_lock:
+                no_celery_try_set_state(
+                    request.state.no_celery_async_results[task_id],
+                )
+
+        task.add_done_callback(
+            lambda _task: asyncio.create_task(
+                async_no_celery_try_set_state(task_id)
+            ),
+        )
+        request = fastapi_current_request.get()
+        async with request.state.no_celery_async_results_lock:
+            results = request.state.no_celery_async_results
+            results[task_id] = {
+                "state": "PENDING",
+                "result": None,
+                "future": None,
+                "task": task,
+            }
+            no_celery_try_set_state(results[task_id])
+        return types.SimpleNamespace(id=task_id)
+
+    func.asyncio_delay = asyncio_delay
+    return func
+
+
+def no_celery_task(*args, **kwargs):
+    if kwargs:
+
+        def wrap(func):
+            return _no_celery_task(func, **kwargs)
+
+        return wrap
+    return _no_celery_task(*args)
+
+
+def no_celery_try_set_state(state):
+    task = state["task"]
+    future = state["future"]
+    if task is not None:
+        if not task.done():
+            state["state"] = "PENDING"
+        else:
+            exception = task.exception()
+            if exception is not None:
+                state["result"] = exception
+                state["state"] = "FAILURE"
+            else:
+                state["state"] = "SUCCESS"
+                state["result"] = task.result()
+    elif future is not None:
+        exception = future.exception(timeout=0)
+        if exception is not None:
+            state["result"] = exception
+            state["state"] = "FAILURE"
+        elif not future.done():
+            state["state"] = "PENDING"
+        else:
+            state["state"] = "SUCCESS"
+            state["result"] = future.result()
+
+
+class NoCeleryAsyncResult:
+    def __init__(self, task_id, *, app=None):
+        self.task_id = task_id
+
+    @property
+    def state(self):
+        request = fastapi_current_request.get()
+        results = request.state.no_celery_async_results
+        if self.task_id not in results:
+            return "UNKNOWN"
+        state = results[self.task_id]
+        no_celery_try_set_state(state)
+        return state["state"]
+
+    def get(self):
+        result = fastapi_current_request.get().state.no_celery_async_results[
+            self.task_id
+        ]["result"]
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+def _make_celery_task_asyncio_delay(app, func, **kwargs):
+    async def asyncio_delay(*args):
+        nonlocal func
+        return func.delay(*args)
+
+    if kwargs:
+        func = app.task(**kwargs)(func)
+    else:
+        func = app.task(func)
+    func.asyncio_delay = asyncio_delay
+    return func
+
+
+def make_celery_task_asyncio_delay(app):
+    def celery_task_asyncio_delay(*args, **kwargs):
+        if kwargs:
+
+            def wrap(func):
+                return _make_celery_task_asyncio_delay(app, func, **kwargs)
+
+            return wrap
+        return _make_celery_task_asyncio_delay(app, *args, **kwargs)
+
+    return celery_task_asyncio_delay
+
+
+if int(os.environ.get("NO_CELERY", "0")):
+    AsyncResult = NoCeleryAsyncResult
+    celery_task = no_celery_task
+else:
+    celery_task = make_celery_task_asyncio_delay(celery_app)
 
 
 def download_step_uses_from_url(
@@ -914,20 +1058,29 @@ async def lifespan_github_app_gidgethub(
 
         @app.post("/webhook/github")
         async def github_webhook_endpoint(request: Request):
+            fastapi_current_app.set(request.app)
+            fastapi_current_request.set(request)
             # TODO(security) Set webhook secret as kwarg in from_http() call
             event = sansio.Event.from_http(
                 request.headers, await request.body()
             )
+            # TODO Configurable events routed to workflows, issue ops
+            if event.event not in ("push", "pull_request"):
+                return
             # Copy context for this request
             context = PolicyEngineContext.model_validate_json(
                 request.state.context.model_dump_json()
             )
             context.app = request.app
             context.state = request.state
-            await router.dispatch(
+            task_id = await check_suite_requested_triggers_run_workflows(
                 event,
                 context.state.gidgethub.gh,
                 context,
+            )
+            return PolicyEngineStatus(
+                status=PolicyEngineStatuses.SUBMITTED,
+                detail=PolicyEngineSubmitted(id=task_id),
             )
 
     # NOTE SECURITY This token has permissions to all installations!!! Swap
@@ -1026,7 +1179,9 @@ class LifespanCallbackWithConfig(BaseModel):
     @model_validator(mode="after")
     def load_callback_or_set_entrypoint_string(self) -> Self:
         if self.callback and self.config_string:
-            self.entrypoint_string = f"{make_entrypoint_style_string(self.callback)}:{self.config_string}"
+            self.entrypoint_string = (
+                f"{make_entrypoint_style_string(self.callback)}"
+            )
         elif self.entrypoint_string and self.config_string:
             self.callback = list(entrypoint_style_load(self.entrypoint_string))[
                 0
@@ -1101,9 +1256,11 @@ class PolicyEngineContext(BaseModel, extra="forbid"):
 
 
 fastapi_current_app = contextvars.ContextVar("fastapi_current_app")
+fastapi_current_request = contextvars.ContextVar("fastapi_current_request")
 
 
-async def async_celery_run_workflow(context, request):
+@contextlib.asynccontextmanager
+async def async_celery_setup_workflow(context, request):
     if isinstance(context, str):
         context = PolicyEngineContext.model_validate_json(context)
     if isinstance(request, str):
@@ -1136,101 +1293,42 @@ async def async_celery_run_workflow(context, request):
                     context, request
                 )
                 stack["secrets"] = copy.deepcopy(request.context["secrets"])
-            celery_run_workflow_context_stack_push(context, request, stack)
-            # Run steps
-            for job in workflow.jobs.values():
-                # TODO Kick off jobs in parallel / dep matrix
-                for step in job.steps:
-                    execute_step(context, request, step)
-
-        detail = PolicyEngineComplete(
-            id="",
-            exit_status=PolicyEngineCompleteExitStatuses.SUCCESS,
-            outputs={},
-        )
-        request_status = PolicyEngineStatus(
-            status=PolicyEngineStatuses.COMPLETE,
-            detail=detail,
-        )
-        return request_status.model_dump_json()
+                celery_run_workflow_context_stack_push(context, request, stack)
+            yield (context, request)
 
 
+async def async_celery_run_workflow(context, request):
+    async with async_celery_setup_workflow(context, request) as (
+        context,
+        request,
+    ):
+        # Run steps
+        for job in request.workflow.jobs.values():
+            # TODO Kick off jobs in parallel / dep matrix
+            for step in job.steps:
+                execute_step(context, request, step)
+
+    detail = PolicyEngineComplete(
+        id="",
+        exit_status=PolicyEngineCompleteExitStatuses.SUCCESS,
+        outputs={},
+    )
+    request_status = PolicyEngineStatus(
+        status=PolicyEngineStatuses.COMPLETE,
+        detail=detail,
+    )
+    return request_status
+
+
+async def no_celery_async_celery_run_workflow(context, request):
+    return (await async_celery_run_workflow(context, request)).model_dump_json()
+
+
+@celery_task(no_celery_async=no_celery_async_celery_run_workflow)
 def celery_run_workflow(context, request):
     return asyncio.get_event_loop().run_until_complete(
-        async_celery_run_workflow(context, request),
+        no_celery_async_celery_run_workflow(context, request),
     )
-
-
-task_celery_run_workflow = celery_app.task(celery_run_workflow)
-
-
-def number_of_workers():
-    return (multiprocessing.cpu_count() * 2) + 1
-
-
-NO_CELERY_ASYNC_RESULTS = {}
-EXECUTOR = concurrent.futures.ProcessPoolExecutor(
-    max_workers=number_of_workers()
-).__enter__()
-atexit.register(lambda: EXECUTOR.__exit__(None, None, None))
-
-
-def no_celery_task(func):
-    def delay(*args):
-        nonlocal func
-        global EXECUTOR
-        task_id = str(uuid.uuid4())
-        future = EXECUTOR.submit(func, *args)
-        NO_CELERY_ASYNC_RESULTS[task_id] = {
-            "state": "PENDING",
-            "result": None,
-            "future": future,
-        }
-        future.add_done_callback(
-            lambda _future: no_celery_try_set_state(
-                NO_CELERY_ASYNC_RESULTS[task_id],
-            ),
-        )
-        return types.SimpleNamespace(id=task_id)
-
-    func.delay = delay
-    return func
-
-
-def no_celery_try_set_state(state):
-    future = state["future"]
-    if not future.done():
-        state["state"] = "PENDING"
-    else:
-        exception = future.exception(timeout=0)
-        if exception is not None:
-            state["result"] = exception
-            state["state"] = "FAILURE"
-        else:
-            state["state"] = "SUCCESS"
-            state["result"] = future.result()
-
-
-class NoCeleryAsyncResult:
-    def __init__(self, task_id, *, app=None):
-        self.task_id = task_id
-
-    @property
-    def state(self):
-        state = NO_CELERY_ASYNC_RESULTS[self.task_id]
-        no_celery_try_set_state(state)
-        return state["state"]
-
-    def get(self):
-        result = NO_CELERY_ASYNC_RESULTS[self.task_id]["result"]
-        if isinstance(result, Exception):
-            raise result
-        return result
-
-
-if "NO_CELERY" in os.environ:
-    AsyncResult = NoCeleryAsyncResult
-    task_celery_run_workflow = no_celery_task(celery_run_workflow)
 
 
 @contextlib.asynccontextmanager
@@ -1241,7 +1339,9 @@ async def startup_fastapi_app_policy_engine_context(
     state = {}
     if context is None:
         context = {}
-    if not isinstance(context, PolicyEngineContext):
+    if isinstance(context, str):
+        context = PolicyEngineContext.model_validate_json(context)
+    elif not isinstance(context, PolicyEngineContext):
         context = PolicyEngineContext.model_validate(context)
     context.app = app
     state["context"] = context
@@ -1252,7 +1352,7 @@ async def startup_fastapi_app_policy_engine_context(
                     lifespan_callback(app, context)
                 )
             )
-        context.state = state
+        context.state = types.SimpleNamespace(**state)
         yield state
 
 
@@ -1268,12 +1368,17 @@ def make_fastapi_app(
     )
 
     @app.get("/request/status/{request_id}")
-    def route_policy_engine_status(
+    async def route_policy_engine_status(
         request_id: str,
+        fastapi_request: Request,
     ) -> PolicyEngineStatus:
         global celery_app
-        request_task = AsyncResult(request_id, app=celery_app)
-        if request_task.state == "PENDING":
+        fastapi_current_app.set(fastapi_request.app)
+        fastapi_current_request.set(fastapi_request)
+        async with fastapi_request.state.no_celery_async_results_lock:
+            request_task = AsyncResult(request_id, app=celery_app)
+            request_task_state = request_task.state
+        if request_task_state == "PENDING":
             request_status = PolicyEngineStatus(
                 status=PolicyEngineStatuses.IN_PROGRESS,
                 detail=PolicyEngineInProgress(
@@ -1282,8 +1387,9 @@ def make_fastapi_app(
                     status_updates={},
                 ),
             )
-        elif request_task.state in ("SUCCESS", "FAILURE"):
-            status_json_string = request_task.get()
+        elif request_task_state in ("SUCCESS", "FAILURE"):
+            async with fastapi_request.state.no_celery_async_results_lock:
+                status_json_string = request_task.get()
             status = json.loads(status_json_string)
             detail_class = DETAIL_CLASS_MAPPING[status["status"]]
             status["detail"] = detail_class(**status["detail"])
@@ -1298,19 +1404,22 @@ def make_fastapi_app(
         return request_status
 
     @app.post("/request/create")
-    def route_request(
+    async def route_request(
         request: PolicyEngineRequest,
         fastapi_request: Request,
     ) -> PolicyEngineStatus:
         fastapi_current_app.set(fastapi_request.app)
+        fastapi_current_request.set(fastapi_request)
         # TODO Handle when submitted.status cases
         request_status = PolicyEngineStatus(
             status=PolicyEngineStatuses.SUBMITTED,
             detail=PolicyEngineSubmitted(
                 id=str(
-                    task_celery_run_workflow.delay(
-                        fastapi_request.state.context.model_dump_json(),
-                        request.model_dump_json(),
+                    (
+                        await celery_run_workflow.asyncio_delay(
+                            fastapi_request.state.context.model_dump_json(),
+                            request.model_dump_json(),
+                        )
                     ).id
                 ),
             ),
@@ -1320,7 +1429,27 @@ def make_fastapi_app(
     return app
 
 
-DEFAULT_LIFESPAN_CALLBACKS = []
+@contextlib.asynccontextmanager
+async def lifespan_no_celery(
+    config_string,
+    app,
+    _context,
+):
+    if int(config_string):
+        yield
+        return
+    yield {
+        "no_celery_async_results_lock": asyncio.Lock(),
+        "no_celery_async_results": {},
+    }
+
+
+DEFAULT_LIFESPAN_CALLBACKS = [
+    LifespanCallbackWithConfig(
+        callback=lifespan_no_celery,
+        config_string=os.environ.get("NO_CELERY", "0"),
+    ),
+]
 for callback_key, entrypoint_string in os.environ.items():
     if not callback_key.startswith("LIFESPAN_CALLBACK_"):
         continue
@@ -1339,7 +1468,10 @@ for callback_key, entrypoint_string in os.environ.items():
 
 async def background_task_celery_worker():
     # celery_app.worker_main(argv=["worker", "--loglevel=INFO"])
-    celery_app.tasks["tasks.celery_run_workflow"] = task_celery_run_workflow
+    celery_app.tasks["tasks.celery_run_workflow"] = celery_run_workflow
+    celery_app.tasks[
+        "tasks.workflow_run_github_app_gidgethub"
+    ] = workflow_run_github_app_gidgethub
     celery_app.Worker(app=celery_app).start()
 
 
@@ -1371,7 +1503,7 @@ def subprocess_celery_worker(**kwargs):
 
 @pytest.fixture
 def pytest_fixture_background_task_celery_worker():
-    if "NO_CELERY" in os.environ:
+    if int(os.environ.get("NO_CELERY", "0")):
         yield
         return
     with subprocess_celery_worker() as proc:
@@ -1499,7 +1631,7 @@ async def test_read_main(
                 != policy_engine_request_status["status"]
             ):
                 break
-            time.sleep(5)
+            time.sleep(0.01)
 
         assert (
             PolicyEngineStatuses.COMPLETE.value
@@ -1535,6 +1667,134 @@ cache = cachetools.LRUCache(maxsize=500)
 # @router.register("check_run", action="rerequested")
 
 
+async def async_workflow_run_github_app_gidgethub(
+    context,
+    request,
+    event,
+    task_id,
+):
+    event = sansio.Event(
+        event["data"],
+        event=event["event"],
+        delivery_id=event["delivery_id"],
+    )
+    async with async_celery_setup_workflow(context, request) as (
+        context,
+        request,
+    ):
+        access_token_response = await gidgethub_get_access_token(
+            context, request
+        )
+        # access_token_response["installation"] contains installation info
+        installation_jwt = access_token_response["token"]
+        started_at = datetime.datetime.now()
+        full_name = event.data["repository"]["full_name"]
+        url = f"https://api.github.com/repos/{full_name}/check-runs"
+        data = {
+            "name": request.workflow.name,
+            "head_sha": event.data["after"],
+            "status": "in_progress",
+            "external_id": task_id,
+            "started_at": started_at.astimezone(datetime.timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
+            "output": {
+                "title": request.workflow.name,
+                "summary": "",
+                "text": "",
+            },
+        }
+        check_run_result = await context.state.gidgethub.gh.post(
+            url, data=data, jwt=installation_jwt
+        )
+        check_run_id = check_run_result["id"]
+        status = await async_celery_run_workflow(context, request)
+        url = f"https://api.github.com/repos/{full_name}/check-runs/{check_run_id}"
+        data = {
+            "name": request.workflow.name,
+            "started_at": started_at.astimezone(datetime.timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
+            "status": "completed",
+            "conclusion": status.detail.exit_status.value,
+            "completed_at": datetime.datetime.now()
+            .astimezone(datetime.timezone.utc)
+            .strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "output": {
+                "title": "Mighty Readme report",
+                "summary": "There are 0 failures, 2 warnings, and 1 notices.",
+                "text": "You may have some misspelled words on lines 2 and 4. You also may want to add a section in your README about how to install your app.",
+                "annotations": [
+                    {
+                        "path": "README.md",
+                        "annotation_level": "warning",
+                        "title": "Spell Checker",
+                        "message": "Check your spelling for '''banaas'''.",
+                        "raw_details": "Do you mean '''bananas''' or '''banana'''?",
+                        "start_line": 2,
+                        "end_line": 2,
+                    },
+                    {
+                        "path": "README.md",
+                        "annotation_level": "warning",
+                        "title": "Spell Checker",
+                        "message": "Check your spelling for '''aples'''",
+                        "raw_details": "Do you mean '''apples''' or '''Naples'''",
+                        "start_line": 4,
+                        "end_line": 4,
+                    },
+                ],
+                "images": [
+                    {
+                        "alt": "Super bananas",
+                        "image_url": "http://example.com/images/42",
+                    }
+                ],
+            },
+        }
+        await context.state.gidgethub.gh.patch(
+            url, data=data, jwt=installation_jwt
+        )
+
+    detail = PolicyEngineComplete(
+        id="",
+        exit_status=PolicyEngineCompleteExitStatuses.SUCCESS,
+        outputs={},
+    )
+    request_status = PolicyEngineStatus(
+        status=PolicyEngineStatuses.COMPLETE,
+        detail=detail,
+    )
+    return request_status
+
+
+async def no_celery_async_workflow_run_github_app_gidgethub(
+    self, context, request, event
+):
+    return (
+        await async_workflow_run_github_app_gidgethub(
+            context,
+            request,
+            event,
+            self.request.id,
+        )
+    ).model_dump_json()
+
+
+@celery_task(
+    bind=True, no_celery_async=no_celery_async_workflow_run_github_app_gidgethub
+)
+def workflow_run_github_app_gidgethub(self, context, request, event):
+    return asyncio.get_event_loop().run_until_complete(
+        no_celery_async_workflow_run_github_app_gidgethub(
+            self,
+            context,
+            request,
+            event,
+        )
+    )
+
+
 # @router.register("check_suite", action="requested")
 @router.register("push")
 @router.register("pull_request", action="opened")
@@ -1544,124 +1804,124 @@ async def check_suite_requested_triggers_run_workflows(
     gh,
     context,
 ):
-    github_actor = event.data["sender"]["login"]
-    github_repository = event.data["repository"]["full_name"]
-    request = PolicyEngineRequest(
-        context={
-            "config": {
-                "env": {
-                    "GITHUB_ACTOR": github_actor,
-                    "GITHUB_REPOSITORY": github_repository,
-                },
-            },
-        },
-        # TODO workflow router to specify which webhook trigger which workflows
-        workflow=textwrap.dedent(
-            """
-            on:
-              push:
-                branches:
-                - main
+    return str(
+        (
+            await workflow_run_github_app_gidgethub.asyncio_delay(
+                context.model_dump_json(),
+                PolicyEngineRequest(
+                    context={
+                        "config": {
+                            "env": {
+                                "GITHUB_ACTOR": event.data["sender"]["login"],
+                                "GITHUB_REPOSITORY": event.data["repository"][
+                                    "full_name"
+                                ],
+                            },
+                        },
+                    },
+                    # TODO workflow router to specify which webhook trigger which workflows
+                    workflow=textwrap.dedent(
+                        """
+                name: 'My Cool Status Check'
+                on:
+                  push:
+                    branches:
+                    - main
 
-            jobs:
-              test:
-                runs-on: self-hosted
-                steps:
-                - uses: actions/checkout@v4
-                - run: |
-                    echo Hello World
-            """
-        ),
-    )
-    access_token_response = await gidgethub_get_access_token(context, request)
-    # access_token_response["installation"] contains installation info
-    installation_jwt = access_token_response["token"]
-    with snoop():
-        snoop.pp(event.event)
-        if event.event == "push":
-            full_name = event.data["repository"]["full_name"]
-            url = f"https://api.github.com/repos/{full_name}/check-runs"
-            task_id = str(
-                task_celery_run_workflow.delay(
-                    context.model_dump_json(),
-                    request.model_dump_json(),
-                    # TODO Callback with results when complete
-                    # link=
-                ).id
+                jobs:
+                  test:
+                    runs-on: self-hosted
+                    steps:
+                    - uses: actions/checkout@v4
+                    - run: |
+                        echo Hello World
+                """
+                    ),
+                ).model_dump_json(),
+                event.__dict__,
             )
-            data = {
-                "name": "mighty_readme",
-                "head_sha": event.data["after"],
-                "status": "in_progress",
-                "external_id": task_id,
-                "started_at": "2018-05-04T01:14:52Z",
-                "output": {
-                    "title": "Mighty Readme report",
-                    "summary": "",
-                    "text": "",
-                },
-            }
-            result = await gh.post(url, data=data, jwt=installation_jwt)
-            snoop.pp(result)
-        elif event.event == "pull_request":
-            pass
-            pull_request = event.data["pull_request"]
-        # pull_request = event.data["pull_request"]
-        # push = event.data["push"]
+        ).id
+    )
 
 
 @pytest.mark.asyncio
-async def test_check_suite_requested_triggers_run_workflows():
-    return
-    await check_suite_requested_triggers_run_workflows(event, gh)
-
-
-"""
-curl -L \
-  -X PATCH \
-  -H "Accept: application/vnd.github+json" \
-  -H "Authorization: Bearer <YOUR-TOKEN>" \
-  -H "X-GitHub-Api-Version: 2022-11-28" \
-  https://api.github.com/repos/OWNER/REPO/check-runs/CHECK_RUN_ID
-{
-    "name": "mighty_readme",
-    "started_at": "2018-05-04T01:14:52Z",
-    "status": "completed",
-    "conclusion": "success",
-    "completed_at": "2018-05-04T01:14:52Z",
-    "output": {
-        "title": "Mighty Readme report",
-        "summary": "There are 0 failures, 2 warnings, and 1 notices.",
-        "text": "You may have some misspelled words on lines 2 and 4. You also may want to add a section in your README about how to install your app.",
-        "annotations": [
-            {
-                "path": "README.md",
-                "annotation_level": "warning",
-                "title": "Spell Checker",
-                "message": "Check your spelling for '''banaas'''.",
-                "raw_details": "Do you mean '''bananas''' or '''banana'''?",
-                "start_line": 2,
-                "end_line": 2,
-            },
-            {
-                "path": "README.md",
-                "annotation_level": "warning",
-                "title": "Spell Checker",
-                "message": "Check your spelling for '''aples'''",
-                "raw_details": "Do you mean '''apples''' or '''Naples'''",
-                "start_line": 4,
-                "end_line": 4,
-            },
+@pytest.mark.skipif(
+    not [
+        lifespan_callback
+        for lifespan_callback in DEFAULT_LIFESPAN_CALLBACKS
+        if lifespan_callback.entrypoint_string.endswith(
+            ":lifespan_github_app_gidgethub"
+        )
+    ],
+    reason="To test, set GitHub App config via LIFESPAN_ environment variables",
+)
+async def test_github_app_gidgethub_github_webhook():
+    context = {
+        "lifespan": DEFAULT_LIFESPAN_CALLBACKS,
+        "extra_inits": [
+            policy_engine_context_extra_init_secret_github_token_from_github_app,
+            policy_engine_context_extra_init_secret_github_token_from_env,
         ],
-        "images": [
-            {
-                "alt": "Super bananas",
-                "image_url": "http://example.com/images/42",
-            }
-        ],
-    },
-}
-"""
+    }
+
+    app = make_fastapi_app(context=context)
+
+    data = {
+        "after": "a1b70ee3b0343adc24e3b75314262e43f5c79cc2",
+        "repository": {
+            "full_name": "pdxjohnny/scitt-api-emulator",
+        },
+        "sender": {
+            "login": "pdxjohnny",
+        },
+    }
+    headers = {
+        "X-GitHub-Event": "push",
+        "X-GitHub-Delivery": "42",
+    }
+
+    with TestClient(app) as client:
+        # Submit
+        response = client.post(
+            "/webhook/github",
+            headers=headers,
+            json=data,
+        )
+        assert response.status_code == 200, json.dumps(
+            response.json(), indent=4
+        )
+        policy_engine_request_status = response.json()
+        assert (
+            PolicyEngineStatuses.SUBMITTED.value
+            == policy_engine_request_status["status"]
+        )
+
+        policy_engine_request_id = policy_engine_request_status["detail"]["id"]
+
+        # Check complete
+        for _ in range(0, 1000):
+            response = client.get(f"/request/status/{policy_engine_request_id}")
+            assert response.status_code == 200, json.dumps(
+                response.json(), indent=4
+            )
+            policy_engine_request_status = response.json()
+            policy_engine_request_id = policy_engine_request_status["detail"][
+                "id"
+            ]
+            if (
+                PolicyEngineStatuses.IN_PROGRESS.value
+                != policy_engine_request_status["status"]
+            ):
+                break
+            time.sleep(0.01)
+
+        assert (
+            PolicyEngineStatuses.COMPLETE.value
+            == policy_engine_request_status["status"]
+        )
+
+        # Check completed results
+        policy_engine_request_completed = policy_engine_request_status["detail"]
 
 
 class StandaloneApplication(gunicorn.app.base.BaseApplication):
@@ -1771,7 +2031,9 @@ def cli():
 
     args.lifespan = list(
         map(
-            lambda arg: LifespanCallbackWithConfig(
+            lambda arg: arg
+            if isinstance(arg, LifespanCallbackWithConfig)
+            else LifespanCallbackWithConfig(
                 entrypoint_string=arg[0],
                 config_string=arg[1],
             ),
