@@ -206,7 +206,7 @@ class PolicyEngineWorkflowJobStep(BaseModel, extra="forbid"):
     # TODO Alias doesn't seem to be working here
     # if_condition: Optional[str] = Field(default=None, alias="if")
     # TODO Implement step if conditionals, YAML load output of eval_js
-    if_condition: Optional[str] = Field(default=None)
+    if_condition: Optional[Union[str, bool, int]] = Field(default=None)
     name: Optional[str] = None
     uses: Optional[str] = None
     # TODO Alias doesn't seem to be working here
@@ -601,6 +601,7 @@ def _evaluate_using_javascript(context, request, code_block):
     javascript_path.write_text(
         textwrap.dedent(
             r"""
+            function always() { return "__GITHUB_ACTIONS_ALWAYS__"; }
             const github = """
             + json.dumps(github_context, sort_keys=True)
             + """;
@@ -702,7 +703,7 @@ async def test_evaluate_using_javascript(template, should_be):
             context,
             request,
         )
-        stack = celery_run_workflow_context_stack_make_new(context, request)
+        stack = celery_run_workflow_context_stack_make_new(context, request, "test")
         stack["secrets"] = copy.deepcopy(request.context["secrets"])
         celery_run_workflow_context_stack_push(
             context,
@@ -735,7 +736,7 @@ def step_parse_outputs_github_actions(context, step, step_outputs_string):
             )
         elif current_output_delimiter:
             if line.startswith(current_output_delimiter):
-                outputs[current_output_key] = current_output_value
+                outputs[current_output_key] = current_output_value[:-1]
                 current_output_key = None
                 current_output_delimiter = None
                 current_output_value = ""
@@ -824,22 +825,37 @@ def execute_step_uses(context, request, step):
     if action_yaml_obj["runs"]["using"].startswith("node"):
         env = copy.deepcopy(os.environ)
         env.update(stack["env"])
-        tee_proc = subprocess.Popen(["tee", stack["console_output"]])
+        cmd = [
+            "node",
+            extracted_path.joinpath(action_yaml_obj["runs"]["main"]),
+        ]
+        tee_proc = subprocess.Popen(
+            ["tee", stack["console_output"]],
+            stdin=subprocess.PIPE,
+        )
         try:
             completed_proc = subprocess.run(
-                [
-                    "node",
-                    extracted_path.joinpath(action_yaml_obj["runs"]["main"]),
-                ],
+                cmd,
                 cwd=stack["workspace"],
                 stdin=request.context["devnull"],
                 stdout=tee_proc.stdin,
                 stderr=tee_proc.stdin,
                 env=env,
             )
-            completed_proc.check_returncode()
+            step_io_update_stack_output_and_env_github_actions(
+                context,
+                request,
+                step,
+            )
+            try:
+                completed_proc.check_returncode()
+            except Exception as error:
+                tee_proc.stdin.close()
+                tee_proc.wait()
+                raise Exception(f'Command ({shlex.join(map(str, cmd))}) exited with code {error.returncode}:\n{pathlib.Path(stack["console_output"]).read_text(errors="ignore")}') from error
         finally:
-            tee_proc.terminate()
+            tee_proc.stdin.close()
+            tee_proc.wait()
     elif action_yaml_obj["runs"]["using"] == "composite":
         composite_steps = action_yaml_obj["runs"]["steps"]
         # TODO HACK Remove by fixing PyDantic Field.alias = True deserialization
@@ -847,7 +863,7 @@ def execute_step_uses(context, request, step):
             if "with" in composite_step:
                 composite_step["with_inputs"] = composite_step["with"]
                 del composite_step["with"]
-        stack = celery_run_workflow_context_stack_make_new(context, request)
+        stack = celery_run_workflow_context_stack_make_new(context, request, step.uses)
         # TODO Reusable workflows, populate secrets
         # stack["secrets"] = request.context["secrets"]
         celery_run_workflow(
@@ -868,8 +884,6 @@ def execute_step_uses(context, request, step):
     else:
         raise NotImplementedError("Only node and composite actions implemented")
 
-    step_io_update_stack_output_and_env_github_actions(context, request, step)
-
 
 def execute_step_uses_org_repo_at_version(context, request, step):
     download_step_uses(context, request, step)
@@ -887,7 +901,8 @@ def execute_step_run(context, request, step):
         "run.sh",
     )
 
-    temp_script_path.write_text(step.run)
+    step_run = evaluate_using_javascript(context, request, step.run)
+    temp_script_path.write_text(step_run)
 
     shell = stack.get("shell", "bash -xe")
     if "{0}" not in shell:
@@ -897,7 +912,10 @@ def execute_step_run(context, request, step):
 
     env = copy.deepcopy(os.environ)
     env.update(stack["env"])
-    tee_proc = subprocess.Popen(["tee", stack["console_output"]])
+    tee_proc = subprocess.Popen(
+        ["tee", stack["console_output"]],
+        stdin=subprocess.PIPE,
+    )
     try:
         completed_proc = subprocess.run(
             cmd,
@@ -907,27 +925,38 @@ def execute_step_run(context, request, step):
             stderr=tee_proc.stdin,
             env=env,
         )
-        completed_proc.check_returncode()
-    finally:
-        tee_proc.terminate()
 
-    step_io_update_stack_output_and_env_github_actions(
-        context,
-        request,
-        step,
-    )
+        step_io_update_stack_output_and_env_github_actions(
+            context,
+            request,
+            step,
+        )
+
+        try:
+            completed_proc.check_returncode()
+        except Exception as error:
+            tee_proc.stdin.close()
+            tee_proc.wait()
+            raise Exception(f'Command ({shlex.join(map(str, cmd))}) exited with code {error.returncode}:\n{pathlib.Path(stack["console_output"]).read_text(errors="ignore")}') from error
+    finally:
+        tee_proc.stdin.close()
+        tee_proc.wait()
 
 
 def execute_step(context, request, step):
-    old_stack = request.context["stack"][-1]
-    stack = celery_run_workflow_context_stack_make_new(context, request)
-    celery_run_workflow_context_stack_push(context, request, stack)
-    # Keep the weakref, outputs should mod via pointer
-    stack["outputs"] = old_stack["outputs"]
-    # Don't allow messing with secrets (use copy.deepcopy)
-    stack["secrets"] = copy.deepcopy(old_stack["secrets"])
-    stack["env"].update(step_build_env(context, request, step))
-    stack["env"].update(step_build_inputs(context, request, step))
+    stack = request.context["stack"][-1]
+
+    if_condition = step.if_condition
+    if if_condition is not None:
+        if not isinstance(if_condition, (bool, int)):
+            if not "${{" in if_condition:
+                if_condition = "${{ " + if_condition + " }}"
+            if_condition = evaluate_using_javascript(context, request, if_condition)
+            if_condition = yaml.safe_load(f"if_condition: {if_condition}")["if_condition"]
+        if not if_condition:
+            return
+        if stack["error"] and if_condition != "__GITHUB_ACTIONS_ALWAYS__":
+            return
 
     if step.uses:
         if "@" in step.uses:
@@ -941,15 +970,16 @@ def execute_step(context, request, step):
             "Only uses: org/repo@vXYZ and run implemented"
         )
 
-    celery_run_workflow_context_stack_pop(context, request)
 
-
-def celery_run_workflow_context_stack_make_new(context, request):
+def celery_run_workflow_context_stack_make_new(context, request, stack_path_part):
     old_stack = request.context
     if request.context["stack"]:
         old_stack = request.context["stack"][-1]
     stack = {
+        "stack_path": old_stack.get("stack_path", []) + [stack_path_part],
+        "error": old_stack.get("error", None),
         "outputs": {},
+        "annotations": {},
         "secrets": {},
         "cachedir": old_stack["cachedir"],
         "tempdir": old_stack["tempdir"],
@@ -963,28 +993,28 @@ def celery_run_workflow_context_stack_push(context, request, stack):
     old_stack = request.context
     if request.context["stack"]:
         old_stack = request.context["stack"][-1]
-    stack["exit_stack"] = old_stack["exit_stack"].enter_context(
-        contextlib.ExitStack(),
+    stack["exit_stack"] = contextlib.ExitStack().__enter__()
+    console_output_path = pathlib.Path(
+        stack["exit_stack"].enter_context(
+            tempfile.TemporaryDirectory(dir=stack.get("tempdir", None)),
+        ),
+        "console_output.txt",
     )
-    stack["console_output"] = str(
-        pathlib.Path(
-            old_stack["exit_stack"].enter_context(
-                tempfile.TemporaryDirectory(dir=old_stack.get("tempdir", None)),
-            ),
-            "console_output.txt",
-        )
-    )
+    console_output_path.write_bytes(b"")
+    stack["console_output"] = str(console_output_path)
     request.context["stack"].append(stack)
 
 
 def celery_run_workflow_context_stack_pop(context, request):
     # TODO Deal with ordering of lines by time, logging module?
+    popped_stack = request.context["stack"].pop()
     request.context["console_output"].append(
-        pathlib.Path(
-            request.context["stack"][-1]["console_output"]
-        ).read_bytes(),
+        [
+            popped_stack["stack_path"],
+            pathlib.Path(popped_stack["console_output"]).read_bytes(),
+        ],
     )
-    request.context["stack"].pop()
+    popped_stack["exit_stack"].__exit__(None, None, None)
 
 
 async def celery_run_workflow_context_init(
@@ -1303,7 +1333,7 @@ async def async_celery_setup_workflow(context, request):
             )
             if stack is None or len(stack) == 0:
                 stack = celery_run_workflow_context_stack_make_new(
-                    context, request
+                    context, request, workflow.name,
                 )
                 stack["secrets"] = copy.deepcopy(request.context["secrets"])
                 celery_run_workflow_context_stack_push(context, request, stack)
@@ -1315,11 +1345,41 @@ async def async_celery_run_workflow(context, request):
         context,
         request,
     ):
-        # Run steps
-        for job in request.workflow.jobs.values():
-            # TODO Kick off jobs in parallel / dep matrix
-            for step in job.steps:
-                execute_step(context, request, step)
+        # TODO Kick off jobs in parallel / dep matrix
+        for job_name, job in request.workflow.jobs.items():
+            old_stack = request.context["stack"][-1]
+            stack = celery_run_workflow_context_stack_make_new(
+                context, request, job_name,
+            )
+            celery_run_workflow_context_stack_push(context, request, stack)
+            # Don't allow messing with outputs at workflow scope (copy.deepcopy)
+            stack["outputs"] = copy.deepcopy(old_stack["outputs"])
+            # Don't allow messing with secrets at workflow scope (copy.deepcopy)
+            stack["secrets"] = copy.deepcopy(old_stack["secrets"])
+            # Run steps
+            for i, step in enumerate(job.steps):
+                old_stack = request.context["stack"][-1]
+                stack = celery_run_workflow_context_stack_make_new(context, request, f"{i + 1} / {len(job.steps)}")
+                celery_run_workflow_context_stack_push(context, request, stack)
+                # Keep the weakref, outputs should mod via pointer with job
+                stack["outputs"] = old_stack["outputs"]
+                # Don't allow messing with secrets (copy.deepcopy)
+                stack["secrets"] = copy.deepcopy(old_stack["secrets"])
+                stack["env"].update(step_build_env(context, request, step))
+                stack["env"].update(step_build_inputs(context, request, step))
+                try:
+                    # step_index is tuple of (current index, length of steps)
+                    execute_step(context, request, step)
+                except Exception as step_error:
+                    # TODO error like app: and state: in PolicyEngineContext
+                    request.context["stack"][-1]["error"] = step_error
+                    if request.context["stack"][-2]["error"] is None:
+                        request.context["stack"][-2]["error"] = step_error
+                finally:
+                    celery_run_workflow_context_stack_pop(context, request)
+            if request.context["stack"][-1]["error"] is not None:
+                raise request.context["stack"][-1]["error"]
+
 
     detail = PolicyEngineComplete(
         id="",
