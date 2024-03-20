@@ -71,7 +71,11 @@ In another terminal request exec via curl:
 
 ```bash
 jsonschema -i <(cat request.yml | python -c 'import json, yaml, sys; print(json.dumps(yaml.safe_load(sys.stdin.read()), indent=4, sort_keys=True))') <(python -c 'import json, scitt_emulator.policy_engine; print(json.dumps(scitt_emulator.policy_engine.PolicyEngineRequest.model_json_schema(), indent=4, sort_keys=True))')
-TASK_ID=$(curl -X POST -H "Content-Type: application/json" -d @<(cat request.yml | sed -e "s/__GITHUB_TOKEN_FROM_ENV__/$(gh auth token)/g" | python -c 'import json, yaml, sys; print(json.dumps(yaml.safe_load(sys.stdin.read()), indent=4, sort_keys=True))') http://localhost:8080/request/create  | jq -r .detail.id)
+
+TASK_ID=$(curl -X POST -H "Content-Type: application/json" -d @<(cat request.yml | python -c 'import json, yaml, sys; print(json.dumps(yaml.safe_load(sys.stdin.read()), indent=4, sort_keys=True))') http://localhost:8080/request/create  | jq -r .detail.id)
+curl http://localhost:8080/request/status/$TASK_ID | jq
+
+TASK_ID=$(curl -X POST http://localhost:8080/webhook/github -d '{"after": "a1b70ee3b0343adc24e3b75314262e43f5c79cc2", "repository": {"full_name": "pdxjohnny/scitt-api-emulator"}, "sender": {"login": "pdxjohnny"}}' -H "X-GitHub-Event: push" -H "X-GitHub-Delivery: 42" -H "Content-Type: application/json"  | jq -r .detail.id)
 curl http://localhost:8080/request/status/$TASK_ID | jq
 ```
 """
@@ -146,6 +150,7 @@ class PolicyEngineComplete(BaseModel, extra="forbid"):
     id: str
     exit_status: PolicyEngineCompleteExitStatuses
     outputs: Optional[Dict[str, Any]] = Field(default_factory=lambda: {})
+    annotations: Optional[Dict[str, Any]] = Field(default_factory=lambda: {})
 
 
 class PolicyEngineStatuses(enum.Enum):
@@ -1035,53 +1040,37 @@ async def celery_run_workflow_context_init(
                 extra_init(context, request)
 
 
-def policy_engine_context_extra_init_secret_github_token_from_env(
-    context, request
+@contextlib.asynccontextmanager
+async def lifespan_gidgethub(
+    _config_string,
+    _app,
+    _context,
 ):
-    # TODO Another function which overrides or clears secrets if set
-    secrets = request.context["secrets"]
-    if "GITHUB_TOKEN" not in secrets and "GITHUB_TOKEN" in os.environ:
-        secrets["GITHUB_TOKEN"] = os.environ["GITHUB_TOKEN"]
+    async with aiohttp.ClientSession(trust_env=True) as session:
+        yield {
+            "gidgethub": gidgethub.aiohttp.GitHubAPI(
+                session,
+                # TODO Change actor
+                "pdxjohnny",
+            ),
+        }
+
+
+class LifespanGitHubAppConfig(BaseModel):
+    app_id: int
+    private_key: str
+    danger_wide_permissions_token: str
 
 
 @contextlib.asynccontextmanager
-async def lifespan_github_app_gidgethub(
+async def lifespan_github_app(
     config_string,
     app,
-    _context,
+    context,
 ):
     config = yaml.safe_load(
         pathlib.Path(config_string).expanduser().read_text()
     )
-
-    if isinstance(app, FastAPI):
-
-        @app.post("/webhook/github")
-        async def github_webhook_endpoint(request: Request):
-            fastapi_current_app.set(request.app)
-            fastapi_current_request.set(request)
-            # TODO(security) Set webhook secret as kwarg in from_http() call
-            event = sansio.Event.from_http(
-                request.headers, await request.body()
-            )
-            # TODO Configurable events routed to workflows, issue ops
-            if event.event not in ("push", "pull_request"):
-                return
-            # Copy context for this request
-            context = PolicyEngineContext.model_validate_json(
-                request.state.context.model_dump_json()
-            )
-            context.app = request.app
-            context.state = request.state
-            task_id = await check_suite_requested_triggers_run_workflows(
-                event,
-                context.state.gidgethub.gh,
-                context,
-            )
-            return PolicyEngineStatus(
-                status=PolicyEngineStatuses.SUBMITTED,
-                detail=PolicyEngineSubmitted(id=task_id),
-            )
 
     # NOTE SECURITY This token has permissions to all installations!!! Swap
     # it for a more finely scoped token next:
@@ -1090,26 +1079,50 @@ async def lifespan_github_app_gidgethub(
         private_key=config["private_key"],
     )
 
-    async with aiohttp.ClientSession(trust_env=True) as session:
-        yield {
-            "gidgethub": types.SimpleNamespace(
-                gh=gidgethub.aiohttp.GitHubAPI(
-                    session,
-                    # TODO Change actor
-                    "pdxjohnny",
-                ),
-                **config,
-            )
-        }
+    yield {"github_app": LifespanGitHubAppConfig.model_validate(config)}
+
+
+@contextlib.asynccontextmanager
+async def lifespan_github_token(
+    config_string,
+    app,
+    context,
+):
+    if (
+        config_string in "try_env"
+        and not os.environ.get("GITHUB_TOKEN", "")
+    ):
+        yield
+        return
+
+    if config_string == "env" and not os.environ.get("GITHUB_TOKEN", ""):
+        raise ValueError("GITHUB_TOKEN environment variable is not set")
+
+    if config_string in ("try_env", "env"):
+        config_string = os.environ["GITHUB_TOKEN"]
+
+    yield {"token": config_string}
+
+
+@contextlib.asynccontextmanager
+def policy_engine_context_extra_init_secret_github_token_from_lifespan(
+    context, request
+):
+    secrets = request.context["secrets"]
+    if "GITHUB_TOKEN" not in secrets and hasattr(context.state, "token"):
+        secrets["GITHUB_TOKEN"] = context.state.token
 
 
 async def gidgethub_get_access_token(context, request):
+    # If we have a fine grained personal access token try using that
+    if hasattr(context.state, "token"):
+        return {"token": context.state.token}
     # Find installation ID associated with requesting actor to generated
     # finer grained token
     installation_id = None
-    async for data in context.state.gidgethub.gh.getiter(
+    async for data in context.state.gidgethub.getiter(
         "/app/installations",
-        jwt=context.state.gidgethub.danger_wide_permissions_token,
+        jwt=context.state.github_app.danger_wide_permissions_token,
     ):
         if (
             request.context["config"]["env"]["GITHUB_ACTOR"]
@@ -1128,10 +1141,10 @@ async def gidgethub_get_access_token(context, request):
         )
 
     result = await gidgethub.apps.get_installation_access_token(
-        context.state.gidgethub.gh,
+        context.state.gidgethub,
         installation_id=installation_id,
-        app_id=context.state.gidgethub.app_id,
-        private_key=context.state.gidgethub.private_key,
+        app_id=context.state.github_app.app_id,
+        private_key=context.state.ggithub_app.private_key,
     )
     result["installation"] = data
     return result
@@ -1145,7 +1158,7 @@ async def policy_engine_context_extra_init_secret_github_token_from_github_app(
     context, request
 ):
     secrets = request.context["secrets"]
-    if "GITHUB_TOKEN" in secrets or not hasattr(context.state, "gidgethub"):
+    if "GITHUB_TOKEN" in secrets or not hasattr(context.state, "gidgethub") or not hasattr(context.state, "github_app"):
         return
 
     secrets["GITHUB_TOKEN"] = (
@@ -1178,11 +1191,11 @@ class LifespanCallbackWithConfig(BaseModel):
 
     @model_validator(mode="after")
     def load_callback_or_set_entrypoint_string(self) -> Self:
-        if self.callback and self.config_string:
+        if self.callback is not None and self.config_string is not None:
             self.entrypoint_string = (
                 f"{make_entrypoint_style_string(self.callback)}"
             )
-        elif self.entrypoint_string and self.config_string:
+        elif self.entrypoint_string is not None and self.config_string is not None:
             self.callback = list(entrypoint_style_load(self.entrypoint_string))[
                 0
             ]
@@ -1347,11 +1360,11 @@ async def startup_fastapi_app_policy_engine_context(
     state["context"] = context
     async with contextlib.AsyncExitStack() as async_exit_stack:
         for lifespan_callback in context.lifespan:
-            state.update(
-                await async_exit_stack.enter_async_context(
-                    lifespan_callback(app, context)
-                )
+            state_update = await async_exit_stack.enter_async_context(
+                lifespan_callback(app, context),
             )
+            if state_update:
+                state.update(state_update)
         context.state = types.SimpleNamespace(**state)
         yield state
 
@@ -1426,7 +1439,42 @@ def make_fastapi_app(
         )
         return request_status
 
+
+    @app.post("/webhook/github")
+    async def github_webhook_endpoint(request: Request):
+        fastapi_current_app.set(request.app)
+        fastapi_current_request.set(request)
+        # TODO(security) Set webhook secret as kwarg in from_http() call
+        event = sansio.Event.from_http(request.headers, await request.body())
+        # TODO Configurable events routed to workflows, issue ops
+        if event.event not in ("push", "pull_request"):
+            return
+        # Copy context for this request
+        context = PolicyEngineContext.model_validate_json(
+            request.state.context.model_dump_json()
+        )
+        context.app = request.app
+        context.state = request.state
+        # Router does not return results of dispatched functions
+        task_id = await check_suite_requested_triggers_run_workflows(
+            event,
+            context.state.gidgethub,
+            context,
+        )
+        return PolicyEngineStatus(
+            status=PolicyEngineStatuses.SUBMITTED,
+            detail=PolicyEngineSubmitted(id=task_id),
+        )
+
     return app
+
+
+class NoLockNeeded:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, _exc_type, _exc_value, _exc_traceback):
+        pass
 
 
 @contextlib.asynccontextmanager
@@ -1435,11 +1483,11 @@ async def lifespan_no_celery(
     app,
     _context,
 ):
-    if int(config_string):
-        yield
-        return
+    lock = asyncio.Lock()
+    if not int(config_string):
+        lock = NoLockNeeded()
     yield {
-        "no_celery_async_results_lock": asyncio.Lock(),
+        "no_celery_async_results_lock": lock,
         "no_celery_async_results": {},
     }
 
@@ -1448,6 +1496,14 @@ DEFAULT_LIFESPAN_CALLBACKS = [
     LifespanCallbackWithConfig(
         callback=lifespan_no_celery,
         config_string=os.environ.get("NO_CELERY", "0"),
+    ),
+    LifespanCallbackWithConfig(
+        callback=lifespan_gidgethub,
+        config_string="",
+    ),
+    LifespanCallbackWithConfig(
+        callback=lifespan_github_token,
+        config_string="try_env",
     ),
 ]
 for callback_key, entrypoint_string in os.environ.items():
@@ -1519,7 +1575,7 @@ def pytest_fixture_background_task_celery_worker():
                 "lifespan": DEFAULT_LIFESPAN_CALLBACKS,
                 "extra_inits": [
                     policy_engine_context_extra_init_secret_github_token_from_github_app,
-                    policy_engine_context_extra_init_secret_github_token_from_env,
+                    policy_engine_context_extra_init_secret_github_token_from_lifespan,
                 ],
             },
             {
@@ -1552,7 +1608,7 @@ def pytest_fixture_background_task_celery_worker():
                 "lifespan": DEFAULT_LIFESPAN_CALLBACKS,
                 "extra_inits": [
                     policy_engine_context_extra_init_secret_github_token_from_github_app,
-                    policy_engine_context_extra_init_secret_github_token_from_env,
+                    policy_engine_context_extra_init_secret_github_token_from_lifespan,
                 ],
             },
             textwrap.dedent(
@@ -1689,72 +1745,111 @@ async def async_workflow_run_github_app_gidgethub(
         installation_jwt = access_token_response["token"]
         started_at = datetime.datetime.now()
         full_name = event.data["repository"]["full_name"]
-        url = f"https://api.github.com/repos/{full_name}/check-runs"
-        data = {
-            "name": request.workflow.name,
-            "head_sha": event.data["after"],
-            "status": "in_progress",
-            "external_id": task_id,
-            "started_at": started_at.astimezone(datetime.timezone.utc).strftime(
-                "%Y-%m-%dT%H:%M:%SZ"
-            ),
-            "output": {
-                "title": request.workflow.name,
-                "summary": "",
-                "text": "",
-            },
-        }
-        check_run_result = await context.state.gidgethub.gh.post(
+        # NOTE BUG XXX https://support.github.com/ticket/personal/0/2686424
+        # The REST check-run endpoint docs say those routes work with fine
+        # grained personal access tokens, but they also say they only work with
+        # GitHub Apps, I keep getting Resource not accessible by personal access
+        # token when I make a request. Is this an inconsistency with the
+        # documentation? Should it work with fine grained PAT's as listed? I've
+        # enabled Read & Write on status checks for the fine grained PAT I'm
+        # using.
+        # https://docs.github.com/en/rest/checks/runs?apiVersion=2022-11-28#create-a-check-run
+        check_run_id = None
+        if hasattr(context.state, "github_app"):
+            # GitHub App, use check-runs API
+            url = f"https://api.github.com/repos/{full_name}/check-runs"
+            data = {
+                "name": request.workflow.name,
+                "head_sha": event.data["after"],
+                "status": "in_progress",
+                "external_id": task_id,
+                "started_at": started_at.astimezone(datetime.timezone.utc).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                ),
+                "output": {
+                    "title": request.workflow.name,
+                    "summary": "",
+                    "text": "",
+                },
+            }
+        else:
+            # Personal Access Token, use commit status API
+            url = f'https://api.github.com/repos/{full_name}/statuses/{event.data["after"]}'
+            data = {
+                "state": "pending",
+                # TODO FQDN from lifespan config
+                "target_url": f"https://example.com/build/status/{task_id}",
+                "description": "TODO description TODO",
+                "context": f"policy_engine/workflow/{request.workflow.name}",
+            }
+        check_run_result = await context.state.gidgethub.post(
             url, data=data, jwt=installation_jwt
         )
         check_run_id = check_run_result["id"]
         status = await async_celery_run_workflow(context, request)
-        url = f"https://api.github.com/repos/{full_name}/check-runs/{check_run_id}"
-        data = {
-            "name": request.workflow.name,
-            "started_at": started_at.astimezone(datetime.timezone.utc).strftime(
-                "%Y-%m-%dT%H:%M:%SZ"
-            ),
-            "status": "completed",
-            "conclusion": status.detail.exit_status.value,
-            "completed_at": datetime.datetime.now()
-            .astimezone(datetime.timezone.utc)
-            .strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "output": {
-                "title": "Mighty Readme report",
-                "summary": "There are 0 failures, 2 warnings, and 1 notices.",
-                "text": "You may have some misspelled words on lines 2 and 4. You also may want to add a section in your README about how to install your app.",
-                "annotations": [
-                    {
-                        "path": "README.md",
-                        "annotation_level": "warning",
-                        "title": "Spell Checker",
-                        "message": "Check your spelling for '''banaas'''.",
-                        "raw_details": "Do you mean '''bananas''' or '''banana'''?",
-                        "start_line": 2,
-                        "end_line": 2,
-                    },
-                    {
-                        "path": "README.md",
-                        "annotation_level": "warning",
-                        "title": "Spell Checker",
-                        "message": "Check your spelling for '''aples'''",
-                        "raw_details": "Do you mean '''apples''' or '''Naples'''",
-                        "start_line": 4,
-                        "end_line": 4,
-                    },
-                ],
-                "images": [
-                    {
-                        "alt": "Super bananas",
-                        "image_url": "http://example.com/images/42",
-                    }
-                ],
-            },
-        }
-        await context.state.gidgethub.gh.patch(
-            url, data=data, jwt=installation_jwt
-        )
+        if hasattr(context.state, "github_app"):
+            # GitHub App, use check-runs API
+            url = f"https://api.github.com/repos/{full_name}/check-runs/{check_run_id}"
+            data = {
+                "name": request.workflow.name,
+                "started_at": started_at.astimezone(datetime.timezone.utc).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                ),
+                "status": "completed",
+                "conclusion": status.detail.exit_status.value,
+                "completed_at": datetime.datetime.now()
+                .astimezone(datetime.timezone.utc)
+                .strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "output": {
+                    "title": "Mighty Readme report",
+                    "summary": "There are 0 failures, 2 warnings, and 1 notices.",
+                    "text": "You may have some misspelled words on lines 2 and 4. You also may want to add a section in your README about how to install your app.",
+                    "annotations": [
+                        {
+                            "path": "README.md",
+                            "annotation_level": "warning",
+                            "title": "Spell Checker",
+                            "message": "Check your spelling for '''banaas'''.",
+                            "raw_details": "Do you mean '''bananas''' or '''banana'''?",
+                            "start_line": 2,
+                            "end_line": 2,
+                        },
+                        {
+                            "path": "README.md",
+                            "annotation_level": "warning",
+                            "title": "Spell Checker",
+                            "message": "Check your spelling for '''aples'''",
+                            "raw_details": "Do you mean '''apples''' or '''Naples'''",
+                            "start_line": 4,
+                            "end_line": 4,
+                        },
+                    ],
+                    "images": [
+                        {
+                            "alt": "Super bananas",
+                            "image_url": "http://example.com/images/42",
+                        }
+                    ],
+                },
+            }
+            await context.state.gidgethub.patch(
+                url, data=data, jwt=installation_jwt
+            )
+        else:
+            # Personal Access Token, use commit status API
+            url = f'https://api.github.com/repos/{full_name}/statuses/{event.data["after"]}'
+            data = {
+                # TODO Handle failure
+                "state": "success",
+                "target_url": f"https://example.com/build/status/{task_id}",
+                "description": "TODO description TODO",
+                "context": f"policy_engine/workflow/{request.workflow.name}",
+            }
+            await context.state.gidgethub.post(
+                url, data=data, jwt=installation_jwt
+            )
+            # TODO Create commit comment with same content as GitHub App would
+            # https://docs.github.com/en/enterprise-cloud@latest/rest/commits/comments?apiVersion=2022-11-28#create-a-commit-comment
 
     detail = PolicyEngineComplete(
         id="",
@@ -1771,14 +1866,27 @@ async def async_workflow_run_github_app_gidgethub(
 async def no_celery_async_workflow_run_github_app_gidgethub(
     self, context, request, event
 ):
-    return (
-        await async_workflow_run_github_app_gidgethub(
-            context,
-            request,
-            event,
-            self.request.id,
+    try:
+        return (
+            await async_workflow_run_github_app_gidgethub(
+                context,
+                request,
+                event,
+                self.request.id,
+            )
+        ).model_dump_json()
+    except Exception as error:
+        traceback.print_exc(file=sys.stderr)
+        detail = PolicyEngineComplete(
+            id="",
+            exit_status=PolicyEngineCompleteExitStatuses.FAILURE,
+            annotations={"error": [str(error)]},
         )
-    ).model_dump_json()
+        request_status = PolicyEngineStatus(
+            status=PolicyEngineStatuses.COMPLETE,
+            detail=detail,
+        )
+        return request_status.model_dump_json()
 
 
 @celery_task(
@@ -1822,20 +1930,20 @@ async def check_suite_requested_triggers_run_workflows(
                     # TODO workflow router to specify which webhook trigger which workflows
                     workflow=textwrap.dedent(
                         """
-                name: 'My Cool Status Check'
-                on:
-                  push:
-                    branches:
-                    - main
+                        name: 'My Cool Status Check'
+                        on:
+                          push:
+                            branches:
+                            - main
 
-                jobs:
-                  test:
-                    runs-on: self-hosted
-                    steps:
-                    - uses: actions/checkout@v4
-                    - run: |
-                        echo Hello World
-                """
+                        jobs:
+                          test:
+                            runs-on: self-hosted
+                            steps:
+                            - uses: actions/checkout@v4
+                            - run: |
+                                echo Hello World
+                        """
                     ),
                 ).model_dump_json(),
                 event.__dict__,
@@ -1845,22 +1953,12 @@ async def check_suite_requested_triggers_run_workflows(
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(
-    not [
-        lifespan_callback
-        for lifespan_callback in DEFAULT_LIFESPAN_CALLBACKS
-        if lifespan_callback.entrypoint_string.endswith(
-            ":lifespan_github_app_gidgethub"
-        )
-    ],
-    reason="To test, set GitHub App config via LIFESPAN_ environment variables",
-)
 async def test_github_app_gidgethub_github_webhook():
     context = {
         "lifespan": DEFAULT_LIFESPAN_CALLBACKS,
         "extra_inits": [
             policy_engine_context_extra_init_secret_github_token_from_github_app,
-            policy_engine_context_extra_init_secret_github_token_from_env,
+            policy_engine_context_extra_init_secret_github_token_from_lifespan,
         ],
     }
 
@@ -2022,7 +2120,7 @@ def cli():
         nargs="+",
         default=[
             policy_engine_context_extra_init_secret_github_token_from_github_app,
-            policy_engine_context_extra_init_secret_github_token_from_env,
+            policy_engine_context_extra_init_secret_github_token_from_lifespan,
         ],
         help=f"Entrypoint style paths for PolicyEngineContext.extra_inits",
     )
