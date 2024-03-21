@@ -798,13 +798,7 @@ def evaluate_using_javascript(context, request, code_block):
     ],
 )
 async def test_evaluate_using_javascript(template, should_be):
-    context = PolicyEngineContext(
-        lifespan=DEFAULT_LIFESPAN_CALLBACKS,
-        extra_inits=[
-            policy_engine_context_extra_init_secret_github_token_from_github_app,
-            policy_engine_context_extra_init_secret_github_token_from_lifespan,
-        ],
-    )
+    context = make_default_policy_engine_context()
     request = PolicyEngineRequest(
         context={
             "config": {
@@ -1827,6 +1821,18 @@ for callback_key, entrypoint_string in os.environ.items():
     )
 
 
+DEFAULT_EXTRA_INITS = [
+    policy_engine_context_extra_init_secret_github_token_from_github_app,
+    policy_engine_context_extra_init_secret_github_token_from_lifespan,
+]
+
+def make_default_policy_engine_context():
+    return PolicyEngineContext(
+        lifespan=DEFAULT_LIFESPAN_CALLBACKS.copy(),
+        extra_inits=DEFAULT_EXTRA_INITS.copy(),
+    )
+
+
 async def background_task_celery_worker():
     # celery_app.worker_main(argv=["worker", "--loglevel=INFO"])
     celery_app.tasks["tasks.celery_run_workflow"] = celery_run_workflow
@@ -1835,13 +1841,7 @@ async def background_task_celery_worker():
     )
     async with startup_fastapi_app_policy_engine_context(
         celery_app,
-        context={
-            "lifespan": DEFAULT_LIFESPAN_CALLBACKS,
-            "extra_inits": [
-                policy_engine_context_extra_init_secret_github_token_from_github_app,
-                policy_engine_context_extra_init_secret_github_token_from_lifespan,
-            ],
-        },
+        context=make_default_policy_engine_context(),
     ) as state:
         # Ensure these are always in the path so they don't download on request
         with prepend_to_path(
@@ -1891,13 +1891,7 @@ def pytest_fixture_background_task_celery_worker():
     "context,workflow",
     [
         [
-            {
-                "lifespan": DEFAULT_LIFESPAN_CALLBACKS,
-                "extra_inits": [
-                    policy_engine_context_extra_init_secret_github_token_from_github_app,
-                    policy_engine_context_extra_init_secret_github_token_from_lifespan,
-                ],
-            },
+            make_default_policy_engine_context(),
             {
                 "jobs": {
                     "TEST_JOB": {
@@ -1924,13 +1918,7 @@ def pytest_fixture_background_task_celery_worker():
             },
         ],
         [
-            {
-                "lifespan": DEFAULT_LIFESPAN_CALLBACKS,
-                "extra_inits": [
-                    policy_engine_context_extra_init_secret_github_token_from_github_app,
-                    policy_engine_context_extra_init_secret_github_token_from_lifespan,
-                ],
-            },
+            make_default_policy_engine_context(),
             textwrap.dedent(
                 """
                 on:
@@ -2276,13 +2264,7 @@ async def check_suite_requested_triggers_run_workflows(
 async def test_github_app_gidgethub_github_webhook(
     pytest_fixture_background_task_celery_worker,
 ):
-    context = {
-        "lifespan": DEFAULT_LIFESPAN_CALLBACKS,
-        "extra_inits": [
-            policy_engine_context_extra_init_secret_github_token_from_github_app,
-            policy_engine_context_extra_init_secret_github_token_from_lifespan,
-        ],
-    }
+    context = make_default_policy_engine_context()
 
     app = make_fastapi_app(context=context)
 
@@ -2367,6 +2349,19 @@ class StandaloneApplication(gunicorn.app.base.BaseApplication):
 
 
 def cli_worker(args):
+    lifespan_callbacks_env = {}
+    for lifespan_callback in args.lifespan:
+        if lifespan_callback in DEFAULT_LIFESPAN_CALLBACKS:
+            continue
+
+        i = str(uuid.uuid4())
+        lifespan_callbacks_env.update(
+            {
+                f"LIFESPAN_CALLBACK_{i}": lifespan_callback.entrypoint_string,
+                f"LIFESPAN_CONFIG_{i}": lifespan_callback.config_string,
+            }
+        )
+
     os.execvpe(
         sys.executable,
         [
@@ -2376,14 +2371,7 @@ def cli_worker(args):
         ],
         env={
             **os.environ,
-            **{
-                f"LIFESPAN_CALLBACK_{i}": lifespan_callback.entrypoint_string
-                for i, lifespan_callback in enumerate(args.lifespan)
-            },
-            **{
-                f"LIFESPAN_CONFIG_{i}": lifespan_callback.config_string
-                for i, lifespan_callback in enumerate(args.lifespan)
-            },
+            **lifespan_callbacks_env,
         },
     )
 
@@ -2518,7 +2506,7 @@ def parser_add_argument_lifespan(parser):
         nargs=2,
         action="append",
         metavar=("entrypoint", "config"),
-        default=DEFAULT_LIFESPAN_CALLBACKS,
+        default=DEFAULT_LIFESPAN_CALLBACKS.copy(),
         help=f"entrypoint.style:path ~/path/to/assocaited/config.json for startup and shutdown async context managers. Yield from to set fastapi|celery.app.state",
     )
 
@@ -2554,10 +2542,7 @@ def cli():
     parser_api.add_argument(
         "--request-context-extra-inits",
         nargs="+",
-        default=[
-            policy_engine_context_extra_init_secret_github_token_from_github_app,
-            policy_engine_context_extra_init_secret_github_token_from_lifespan,
-        ],
+        default=DEFAULT_EXTRA_INITS.copy(),
         help=f"Entrypoint style paths for PolicyEngineContext.extra_inits",
     )
 
