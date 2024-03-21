@@ -124,7 +124,8 @@ jobs:
 Pass inputs or more context with `--input` and `--context`.
 
 ```bash
-./scitt_emulator/policy_engine.py client --endpoint http://localhost:8080 --repository pdxjohnny/scitt-api-emulator --workflow workflow.yml --input file_paths '["/README.md"]' | jq
+TASK_ID=$(python -u ./scitt_emulator/policy_engine.py client --endpoint http://localhost:8080 create --repository pdxjohnny/scitt-api-emulator --workflow workflow.yml --input file_paths '["/README.md"]' | tee >(jq 1>/dev/stderr) | jq -r .detail.id)
+python -u ./scitt_emulator/policy_engine.py client --endpoint http://localhost:8080 status --task-id "${TASK_ID}" | tee >(jq -r .detail.annotations.error[] 1>&2) | jq
 ```
 """
 import os
