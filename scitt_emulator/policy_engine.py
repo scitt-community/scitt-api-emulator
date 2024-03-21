@@ -1007,7 +1007,14 @@ def execute_step_run(context, request, step):
     if "{0}" not in shell:
         shell += " {0}"
     shell = shell.replace("{0}", str(temp_script_path.resolve()))
-    cmd = shlex.split(shell)
+    cmd = list(
+        [
+            sys.executable
+            if cmd_arg == "python"
+            else cmd_arg
+            for cmd_arg in shlex.split(shell)
+        ]
+    )
 
     env = copy.deepcopy(os.environ)
     env.update(stack["env"])
