@@ -284,6 +284,9 @@ class PolicyEngineStatus(BaseModel, extra="forbid"):
         if data and isinstance(data, dict):
             if "status" not in data:
                 data["status"] = PolicyEngineStatuses.INPUT_VALIDATION_ERROR.value
+            if isinstance(data["status"], PolicyEngineStatuses):
+                data["status"] = data["status"].value
+
             detail_class = DETAIL_CLASS_MAPPING[data["status"]]
             data["detail"] = detail_class.model_validate(data["detail"])
         return data
@@ -596,6 +599,8 @@ def download_step_uses_from_url(
     # https://docs.github.com/en/actions/learn-github-actions/variables#default-environment-variables
     stack["env"]["GITHUB_ACTION_PATH"] = str(extracted_path.resolve())
 
+    return extracted_path.resolve()
+
 
 def download_step_uses(context, request, step):
     exception = None
@@ -691,6 +696,7 @@ def _evaluate_using_javascript(context, request, code_block):
         "debug": stack.get("debug", 1),
     }
     steps_context = stack["outputs"]
+    # TODO secrets_context
 
     # Find property accessors in dot notation and replace dot notation
     # with bracket notation. Avoids replacements within strings.
@@ -719,7 +725,7 @@ def _evaluate_using_javascript(context, request, code_block):
         ).strip()
     )
     output = subprocess.check_output(
-        ["deno", "repl", "-q", f"--eval-file={javascript_path.resolve()}"],
+        [context.state.deno, "repl", "-q", f"--eval-file={javascript_path.resolve()}"],
         stdin=request.context["devnull"],
         cwd=stack["workspace"],
     ).decode()
@@ -785,7 +791,13 @@ def evaluate_using_javascript(context, request, code_block):
     ],
 )
 async def test_evaluate_using_javascript(template, should_be):
-    context = PolicyEngineContext()
+    context = PolicyEngineContext(
+        lifespan=DEFAULT_LIFESPAN_CALLBACKS,
+        extra_inits=[
+            policy_engine_context_extra_init_secret_github_token_from_github_app,
+            policy_engine_context_extra_init_secret_github_token_from_lifespan,
+        ],
+    )
     request = PolicyEngineRequest(
         context={
             "config": {
@@ -796,21 +808,7 @@ async def test_evaluate_using_javascript(template, should_be):
             },
         }
     )
-    with contextlib.ExitStack() as exit_stack:
-        if "exit_stack" not in request.context:
-            request.context["exit_stack"] = exit_stack
-        await celery_run_workflow_context_init(
-            context,
-            request,
-        )
-        stack = celery_run_workflow_context_stack_make_new(context, request, "test")
-        stack["secrets"] = copy.deepcopy(request.context["secrets"])
-        celery_run_workflow_context_stack_push(
-            context,
-            request,
-            stack,
-        )
-
+    async with async_celery_setup_workflow(context, request) as (context, request):
         evaluated = evaluate_using_javascript(
             context,
             request,
@@ -1172,11 +1170,57 @@ async def celery_run_workflow_context_init(
                 extra_init(context, request)
 
 
+def which(binary):
+    for dirname in os.environ.get("PATH", "").split(":"):
+        check_path = pathlib.Path(dirname, binary)
+        if check_path.exists():
+            return check_path.resolve()
+
+
+@contextlib.asynccontextmanager
+async def lifespan_deno(
+    config_string,
+    _app,
+    _context,
+    state,
+):
+    deno_path = which("deno")
+    if deno_path is not None:
+        yield {"deno": deno_path}
+        return
+    with tempfile.TemporaryDirectory(prefix="deno-") as tempdir:
+        downloads_path = pathlib.Path(tempdir)
+        compressed_path = pathlib.Path(downloads_path, "compressed.zip")
+
+        github_token = None
+        if "github_app" in state:
+            github_token = state["github_app"].danger_wide_permissions_token
+        elif "github_token" in state:
+            github_token = state["github_token"]
+
+        headers = {}
+        if github_token:
+            headers["Authorization"] = f"Bearer {github_token}"
+
+        async with aiohttp.ClientSession(trust_env=True) as session:
+            async with session.get(config_string, headers=headers) as response:
+                compressed_path.write_bytes(await response.read())
+
+        with zipfile.ZipFile(compressed_path) as zipfileobj:
+            zipfileobj.extractall(downloads_path)
+
+        deno_path = downloads_path.joinpath("deno").resolve()
+        deno_path.chmod(0o755)
+
+        yield {"deno": deno_path}
+
+
 @contextlib.asynccontextmanager
 async def lifespan_gidgethub(
     _config_string,
     _app,
     _context,
+    _state,
 ):
     async with aiohttp.ClientSession(trust_env=True) as session:
         yield {
@@ -1199,6 +1243,7 @@ async def lifespan_github_app(
     config_string,
     app,
     context,
+    _state,
 ):
     config = yaml.safe_load(
         pathlib.Path(config_string).expanduser().read_text()
@@ -1219,6 +1264,7 @@ async def lifespan_github_token(
     config_string,
     app,
     context,
+    _state,
 ):
     if (
         config_string in "try_env"
@@ -1233,7 +1279,7 @@ async def lifespan_github_token(
     if config_string in ("try_env", "env"):
         config_string = os.environ["GITHUB_TOKEN"]
 
-    yield {"token": config_string}
+    yield {"github_token": config_string}
 
 
 @contextlib.asynccontextmanager
@@ -1241,14 +1287,14 @@ def policy_engine_context_extra_init_secret_github_token_from_lifespan(
     context, request
 ):
     secrets = request.context["secrets"]
-    if "GITHUB_TOKEN" not in secrets and hasattr(context.state, "token"):
-        secrets["GITHUB_TOKEN"] = context.state.token
+    if "GITHUB_TOKEN" not in secrets and hasattr(context.state, "github_token"):
+        secrets["GITHUB_TOKEN"] = context.state.github_token
 
 
 async def gidgethub_get_access_token(context, request):
     # If we have a fine grained personal access token try using that
-    if hasattr(context.state, "token"):
-        return {"token": context.state.token}
+    if hasattr(context.state, "github_token"):
+        return {"token": context.state.github_token}
     # Find installation ID associated with requesting actor to generated
     # finer grained token
     installation_id = None
@@ -1547,7 +1593,7 @@ async def startup_fastapi_app_policy_engine_context(
     async with contextlib.AsyncExitStack() as async_exit_stack:
         for lifespan_callback in context.lifespan:
             state_update = await async_exit_stack.enter_async_context(
-                lifespan_callback(app, context),
+                lifespan_callback(app, context, state),
             )
             if state_update:
                 state.update(state_update)
@@ -1593,6 +1639,7 @@ def make_fastapi_app(
             detail_class = DETAIL_CLASS_MAPPING[status["status"]]
             status["detail"] = detail_class(**status["detail"])
             request_status = PolicyEngineStatus(**status)
+            request_status.detail.id = request_id
         else:
             request_status = PolicyEngineStatus(
                 status=PolicyEngineStatuses.UNKNOWN,
@@ -1666,8 +1713,9 @@ class NoLockNeeded:
 @contextlib.asynccontextmanager
 async def lifespan_no_celery(
     config_string,
-    app,
+    _app,
     _context,
+    _state,
 ):
     lock = asyncio.Lock()
     if not int(config_string):
@@ -1690,6 +1738,10 @@ DEFAULT_LIFESPAN_CALLBACKS = [
     LifespanCallbackWithConfig(
         callback=lifespan_github_token,
         config_string="try_env",
+    ),
+    LifespanCallbackWithConfig(
+        callback=lifespan_deno,
+        config_string="https://github.com/denoland/deno/releases/download/v1.41.3/deno-x86_64-unknown-linux-gnu.zip",
     ),
 ]
 for callback_key, entrypoint_string in os.environ.items():
@@ -2356,7 +2408,7 @@ async def client_status(
 def cli_async_output(func, args):
     args = vars(args)
     output_args = {
-        "output_format": "yaml",
+        "output_format": "json",
         "output_file": sys.stdout,
     }
     del args["func"]

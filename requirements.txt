@@ -1,0 +1,16 @@
+pyyaml
+snoop
+pytest
+uvicorn
+gunicorn
+celery[redis]
+pydantic
+fastapi
+cachetools
+gidgethub
+aiohttp
+httpx
+nest-asyncio
+pygithub
+bandit
+black
