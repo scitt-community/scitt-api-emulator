@@ -129,6 +129,7 @@ python -u ./scitt_emulator/policy_engine.py client --endpoint http://localhost:8
 ```
 """
 import os
+import io
 import sys
 import json
 import time
@@ -141,7 +142,9 @@ import atexit
 import asyncio
 import pathlib
 import zipfile
+import tarfile
 import inspect
+import logging
 import argparse
 import tempfile
 import textwrap
@@ -187,6 +190,9 @@ from pydantic import (
     field_validator,
 )
 from fastapi.testclient import TestClient
+
+
+logger = logging.getLogger(__name__)
 
 
 def entrypoint_style_load(
@@ -925,7 +931,7 @@ def execute_step_uses(context, request, step):
         env = copy.deepcopy(os.environ)
         env.update(stack["env"])
         cmd = [
-            "node",
+            context.state.nodejs,
             extracted_path.joinpath(action_yaml_obj["runs"]["main"]),
         ]
         tee_proc = subprocess.Popen(
@@ -1171,6 +1177,22 @@ async def celery_run_workflow_context_init(
                 extra_init(context, request)
 
 
+@contextlib.contextmanager
+def prepend_to_path(*args: str, env=None):
+    """
+    Prepend all given directories to the ``PATH`` environment variable.
+    """
+    if env is None:
+        raise Exception("env kwarg must be given")
+    old_path = env.get("PATH", "")
+    # TODO Will this work on Windows?
+    env["PATH"] = ":".join(list(map(str, args)) + old_path.split(":"))
+    try:
+        yield env
+    finally:
+        env["PATH"] = old_path
+
+
 def which(binary):
     for dirname in os.environ.get("PATH", "").split(":"):
         check_path = pathlib.Path(dirname, binary)
@@ -1203,17 +1225,57 @@ async def lifespan_deno(
         if github_token:
             headers["Authorization"] = f"Bearer {github_token}"
 
-        async with aiohttp.ClientSession(trust_env=True) as session:
-            async with session.get(config_string, headers=headers) as response:
-                compressed_path.write_bytes(await response.read())
+        def do_download():
+            request = urllib.request.Request(config_string, headers=headers)
+            with urllib.request.urlopen(request) as response:
+                compressed_path.write_bytes(response.read())
+            with zipfile.ZipFile(compressed_path) as zipfileobj:
+                zipfileobj.extractall(downloads_path)
+            compressed_path.unlink()
 
-        with zipfile.ZipFile(compressed_path) as zipfileobj:
-            zipfileobj.extractall(downloads_path)
+        logger.warning("Downloading deno...")
+        await asyncio.get_event_loop().run_in_executor(None, do_download)
 
         deno_path = downloads_path.joinpath("deno").resolve()
         deno_path.chmod(0o755)
+        logger.warning("Finished downloading deno: %s", deno_path)
 
         yield {"deno": deno_path}
+
+
+@contextlib.asynccontextmanager
+async def lifespan_nodejs(
+    config_string,
+    _app,
+    _context,
+    _state,
+):
+    nodejs_path = which("node")
+    if nodejs_path is not None:
+        yield {"nodejs": nodejs_path}
+        return
+    with tempfile.TemporaryDirectory(prefix="nodejs-") as tempdir:
+        downloads_path = pathlib.Path(tempdir)
+
+        def do_download():
+            with urllib.request.urlopen(config_string) as fileobj:
+                with tarfile.open(fileobj=fileobj, mode='r|*') as tarfileobj:
+                    tarfileobj.extractall(downloads_path)
+
+        logger.warning("Downloading nodejs...")
+        await asyncio.get_event_loop().run_in_executor(None, do_download)
+
+        nodejs_path = list(
+            [
+                path
+                for path in downloads_path.rglob("node")
+                if path.parent.stem == "bin"
+            ]
+        )[0].resolve()
+        nodejs_path.chmod(0o755)
+        logger.warning("Finished downloading nodejs: %s", nodejs_path)
+
+        yield {"nodejs": nodejs_path}
 
 
 @contextlib.asynccontextmanager
@@ -1744,6 +1806,10 @@ DEFAULT_LIFESPAN_CALLBACKS = [
         callback=lifespan_deno,
         config_string="https://github.com/denoland/deno/releases/download/v1.41.3/deno-x86_64-unknown-linux-gnu.zip",
     ),
+    LifespanCallbackWithConfig(
+        callback=lifespan_nodejs,
+        config_string="https://nodejs.org/dist/v20.11.1/node-v20.11.1-linux-x64.tar.xz",
+    ),
 ]
 for callback_key, entrypoint_string in os.environ.items():
     if not callback_key.startswith("LIFESPAN_CALLBACK_"):
@@ -1764,11 +1830,24 @@ for callback_key, entrypoint_string in os.environ.items():
 async def background_task_celery_worker():
     # celery_app.worker_main(argv=["worker", "--loglevel=INFO"])
     celery_app.tasks["tasks.celery_run_workflow"] = celery_run_workflow
-    celery_app.tasks[
-        "tasks.workflow_run_github_app_gidgethub"
-    ] = workflow_run_github_app_gidgethub
-    celery_app.Worker(app=celery_app).start()
-
+    celery_app.tasks["tasks.workflow_run_github_app_gidgethub"] = (
+        workflow_run_github_app_gidgethub
+    )
+    async with startup_fastapi_app_policy_engine_context(
+        celery_app,
+        context={
+            "lifespan": DEFAULT_LIFESPAN_CALLBACKS,
+            "extra_inits": [
+                policy_engine_context_extra_init_secret_github_token_from_github_app,
+                policy_engine_context_extra_init_secret_github_token_from_lifespan,
+            ],
+        },
+    ) as state:
+        # Ensure these are always in the path so they don't download on request
+        with prepend_to_path(
+            state["deno"].parent, state["nodejs"].parent, env=os.environ,
+        ) as env:
+            celery_app.Worker(app=celery_app).start()
 
 
 def celery_worker_exec_with_python():
