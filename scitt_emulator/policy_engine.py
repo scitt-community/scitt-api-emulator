@@ -1676,6 +1676,18 @@ def make_fastapi_app(
         ),
     )
 
+    @app.get("/rate_limit")
+    async def route_policy_engine_status(
+        fastapi_request: Request,
+    ):
+        state = fastapi_request.state
+        github_token = None
+        if hasattr(state, "github_app"):
+            github_token = state.github_app.danger_wide_permissions_token
+        elif hasattr(state, "github_token"):
+            github_token = state.github_token
+        return await state.gidgethub.getitem("/rate_limit", jwt=github_token)
+
     @app.get("/request/status/{request_id}")
     async def route_policy_engine_status(
         request_id: str,
