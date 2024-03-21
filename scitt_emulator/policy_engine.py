@@ -2041,7 +2041,9 @@ async def check_suite_requested_triggers_run_workflows(
 
 
 @pytest.mark.asyncio
-async def test_github_app_gidgethub_github_webhook():
+async def test_github_app_gidgethub_github_webhook(
+    pytest_fixture_background_task_celery_worker,
+):
     context = {
         "lifespan": DEFAULT_LIFESPAN_CALLBACKS,
         "extra_inits": [
