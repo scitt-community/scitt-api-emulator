@@ -1267,7 +1267,7 @@ async def lifespan_github_token(
     _state,
 ):
     if (
-        config_string in "try_env"
+        config_string == "try_env"
         and not os.environ.get("GITHUB_TOKEN", "")
     ):
         yield
