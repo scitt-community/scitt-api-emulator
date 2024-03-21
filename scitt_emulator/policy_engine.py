@@ -78,6 +78,54 @@ curl http://localhost:8080/request/status/$TASK_ID | jq
 TASK_ID=$(curl -X POST http://localhost:8080/webhook/github -d '{"after": "a1b70ee3b0343adc24e3b75314262e43f5c79cc2", "repository": {"full_name": "pdxjohnny/scitt-api-emulator"}, "sender": {"login": "pdxjohnny"}}' -H "X-GitHub-Event: push" -H "X-GitHub-Delivery: 42" -H "Content-Type: application/json"  | jq -r .detail.id)
 curl http://localhost:8080/request/status/$TASK_ID | jq
 ```
+
+Or you can use the builtin client (workflow.yml is 'requests.yml'.workflow):
+
+**workflow.yml**
+
+```yaml
+on:
+  push:
+    branches:
+    - main
+  workflow_dispatch:
+    file_paths:
+      description: 'File paths to download'
+      default: '[]'
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - env:
+        FILE_PATHS: ${{ github.event.inputs.file_paths }}
+        GITHUB_TOKEN: ${{ github.token }}
+      shell: python -u {0}
+      run: |
+        import os
+        import json
+        import pathlib
+
+        from github import Github
+
+        file_paths = json.loads(os.environ["FILE_PATHS"])
+
+        g = Github(os.environ["GITHUB_TOKEN"])
+        upstream = g.get_repo(os.environ["GITHUB_REPOSITORY"])
+
+        for file_path in file_paths:
+            file_path = pathlib.Path("./" + file_path)
+            pygithub_fileobj = upstream.get_contents(
+                str(file_path),
+            )
+            content = pygithub_fileobj.decoded_content
+            file_path.write_bytes(content)
+```
+
+Pass inputs or more context with `--input` and `--context`.
+
+```bash
+./scitt_emulator/policy_engine.py client --endpoint http://localhost:8080 --repository pdxjohnny/scitt-api-emulator --workflow workflow.yml --input file_paths '["/README.md"]' | jq
+```
 """
 import os
 import sys
@@ -186,6 +234,7 @@ class PolicyEngineStatuses(enum.Enum):
     IN_PROGRESS = "in_progress"
     COMPLETE = "complete"
     UNKNOWN = "unknown"
+    INPUT_VALIDATION_ERROR = "input_validation_error"
 
 
 class PolicyEngineStatusUpdateJobStep(BaseModel, extra="forbid"):
@@ -211,6 +260,14 @@ class PolicyEngineUnknown(BaseModel, extra="forbid"):
     id: str
 
 
+class PolicyEngineInputValidationError(BaseModel):
+    msg: str
+    loc: List[str]
+    type: str
+    url: Optional[str] = None
+    input: Optional[str] = None
+
+
 class PolicyEngineStatus(BaseModel, extra="forbid"):
     status: PolicyEngineStatuses
     detail: Union[
@@ -218,7 +275,18 @@ class PolicyEngineStatus(BaseModel, extra="forbid"):
         PolicyEngineInProgress,
         PolicyEngineComplete,
         PolicyEngineUnknown,
+        List[PolicyEngineInputValidationError],
     ]
+
+    @model_validator(mode="before")
+    @classmethod
+    def model_validate_detail(cls, data: Any) -> Any:
+        if data and isinstance(data, dict):
+            if "status" not in data:
+                data["status"] = PolicyEngineStatuses.INPUT_VALIDATION_ERROR.value
+            detail_class = DETAIL_CLASS_MAPPING[data["status"]]
+            data["detail"] = detail_class.model_validate(data["detail"])
+        return data
 
 
 DETAIL_CLASS_MAPPING = {
@@ -226,6 +294,9 @@ DETAIL_CLASS_MAPPING = {
     PolicyEngineStatuses.IN_PROGRESS.value: PolicyEngineInProgress,
     PolicyEngineStatuses.COMPLETE.value: PolicyEngineComplete,
     PolicyEngineStatuses.UNKNOWN.value: PolicyEngineUnknown,
+    PolicyEngineStatuses.INPUT_VALIDATION_ERROR.value: types.SimpleNamespace(
+        model_validate=lambda detail: list(map(PolicyEngineInputValidationError.model_validate, detail)),
+    ),
 }
 
 
@@ -237,6 +308,7 @@ class PolicyEngineWorkflowJobStep(BaseModel, extra="forbid"):
     if_condition: Optional[Union[str, bool, int]] = Field(default=None)
     name: Optional[str] = None
     uses: Optional[str] = None
+    shell: Optional[str] = None
     # TODO Alias doesn't seem to be working here
     # with_inputs: Optional[Dict[str, Any]] = Field(default_factory=lambda: {}, alias="with")
     with_inputs: Optional[Dict[str, Any]] = Field(default_factory=lambda: {})
@@ -932,7 +1004,7 @@ def execute_step_run(context, request, step):
     step_run = evaluate_using_javascript(context, request, step.run)
     temp_script_path.write_text(step_run)
 
-    shell = stack.get("shell", "bash -xe")
+    shell = stack["shell"]
     if "{0}" not in shell:
         shell += " {0}"
     shell = shell.replace("{0}", str(temp_script_path.resolve()))
@@ -1006,6 +1078,8 @@ def celery_run_workflow_context_stack_make_new(context, request, stack_path_part
     stack = {
         "stack_path": old_stack.get("stack_path", []) + [stack_path_part],
         "error": old_stack.get("error", None),
+        # TODO shell from platform.system() selection done in lifecycle
+        "shell": old_stack.get("shell", "bash -xe"),
         "outputs": {},
         "annotations": {},
         "secrets": {},
@@ -1183,7 +1257,7 @@ async def gidgethub_get_access_token(context, request):
         jwt=context.state.github_app.danger_wide_permissions_token,
     ):
         if (
-            request.context["config"]["env"]["GITHUB_ACTOR"]
+            request.context["config"]["env"].get("GITHUB_ACTOR", None)
             == data["account"]["login"]
         ):
             installation_id = data["id"]
@@ -1195,7 +1269,7 @@ async def gidgethub_get_access_token(context, request):
             break
     if installation_id is None:
         raise Exception(
-            f'App installation not found for GitHub Repository {request.context["config"]["env"]["GITHUB_REPOSITORY"]!r} or Actor {request.context["config"]["env"]["GITHUB_ACTOR"]!r}'
+            f'App installation not found for GitHub Repository {request.context["config"]["env"]["GITHUB_REPOSITORY"]!r} or Actor {request.context["config"]["env"].get("GITHUB_ACTOR", None)!r}'
         )
 
     result = await gidgethub.apps.get_installation_access_token(
@@ -1389,6 +1463,8 @@ async def async_celery_run_workflow(context, request):
                 old_stack = request.context["stack"][-1]
                 stack = celery_run_workflow_context_stack_make_new(context, request, f"{i + 1} / {len(job.steps)}")
                 celery_run_workflow_context_stack_push(context, request, stack)
+                if step.shell:
+                    stack["shell"] = step.shell
                 # Keep the weakref, outputs should mod via pointer with job
                 stack["outputs"] = old_stack["outputs"]
                 # Don't allow messing with secrets (copy.deepcopy)
@@ -1400,13 +1476,19 @@ async def async_celery_run_workflow(context, request):
                     execute_step(context, request, step)
                 except Exception as step_error:
                     # TODO error like app: and state: in PolicyEngineContext
+                    if int(os.environ.get("DEBUG", "0")):
+                        step_error = traceback.format_exc()
+                        traceback.print_exc(file=sys.stderr)
                     request.context["stack"][-1]["error"] = step_error
                     if request.context["stack"][-2]["error"] is None:
                         request.context["stack"][-2]["error"] = step_error
                 finally:
                     celery_run_workflow_context_stack_pop(context, request)
-            if request.context["stack"][-1]["error"] is not None:
-                raise request.context["stack"][-1]["error"]
+            job_error = request.context["stack"][-1]["error"]
+            if job_error is not None:
+                if not isinstance(job_error, Exception):
+                    job_error = Exception(job_error)
+                raise job_error
 
 
     detail = PolicyEngineComplete(
@@ -1427,7 +1509,8 @@ async def no_celery_async_celery_run_workflow(context, request):
             await async_celery_run_workflow(context, request)
         ).model_dump_json()
     except Exception as error:
-        traceback.print_exc(file=sys.stderr)
+        if int(os.environ.get("DEBUG", "0")):
+            error = traceback.format_exc()
         detail = PolicyEngineComplete(
             id="",
             exit_status=PolicyEngineCompleteExitStatuses.FAILURE,
@@ -2186,15 +2269,116 @@ def cli_api(args):
     StandaloneApplication(app, options).run()
 
 
-def cli():
-    # TODO Take sys.argv as args to parse as optional
-    estimated_number_of_workers = number_of_workers()
-
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawTextHelpFormatter
+async def client_create(
+    endpoint: str,
+    repository: str,
+    workflow: Union[str, dict, PolicyEngineWorkflow],
+    input: Optional[Dict[str, Any]] = None,
+    context: Optional[Dict[str, Any]] = None,
+    timeout: Optional[int] = None,
+    session: Optional[aiohttp.ClientSession] = None,
+):
+    if isinstance(workflow, str):
+        if workflow.startswith("https://"):
+            # TODO Download workflow, optionally supply auth token
+            raise NotImplementedError("Workflows from URLs not implemented")
+        elif workflow.endswith(".yml") or workflow.endswith(".yaml"):
+            workflow = pathlib.Path(workflow).expanduser().read_text()
+    request = PolicyEngineRequest(
+        inputs=dict(input),
+        context={
+            "config": {
+                "env": {
+                    "GITHUB_REPOSITORY": repository,
+                    "GITHUB_API": "https://api.github.com/",
+                    # TODO Lookup from auth response?
+                    # "GITHUB_ACTOR": actor,
+                    # "GITHUB_ACTOR_ID": actor_id,
+                },
+            },
+        },
+        workflow=workflow,
     )
-    subparsers = parser.add_subparsers(help="sub-command help")
-    parser.set_defaults(func=lambda _: None)
+    if context is not None:
+        request.context.update(context)
+
+    async with contextlib.AsyncExitStack() as async_exit_stack:
+        if session is None:
+            session = await async_exit_stack.enter_async_context(
+                aiohttp.ClientSession(trust_env=True),
+            )
+        url = f"{endpoint}/request/create"
+        async with session.post(url, json=request.model_dump()) as response:
+            try:
+                status = PolicyEngineStatus.model_validate(await response.json())
+            except:
+                raise Exception(await response.text())
+
+            if PolicyEngineStatuses.SUBMITTED != status.status:
+                raise Exception(status)
+
+    return status
+
+
+async def client_status(
+    endpoint: str,
+    task_id: str,
+    poll_interval_in_seconds: Union[int, float] = 0.01,
+    timeout: Optional[int] = None,
+    session: Optional[aiohttp.ClientSession] = None,
+):
+    async with contextlib.AsyncExitStack() as async_exit_stack:
+        if session is None:
+            session = await async_exit_stack.enter_async_context(
+                aiohttp.ClientSession(trust_env=True),
+            )
+        # TODO Make this an argument or provide another command to poll + wss://
+        # Check complete
+        time_elapsed = 0.0
+        while timeout == 0 or time_elapsed < timeout:
+            url = f"{endpoint}/request/status/{task_id}"
+            async with session.get(url) as response:
+                try:
+                    status = PolicyEngineStatus.model_validate(await response.json())
+                except:
+                    raise Exception(await response.text())
+            if PolicyEngineStatuses.IN_PROGRESS != status.status:
+                break
+            await asyncio.sleep(poll_interval_in_seconds)
+            time_elapsed += poll_interval_in_seconds
+
+        if PolicyEngineStatuses.COMPLETE != status.status:
+            raise Exception(f"Task timeout reached: {status!r}")
+
+    return status
+
+
+def cli_async_output(func, args):
+    args = vars(args)
+    output_args = {
+        "output_format": "yaml",
+        "output_file": sys.stdout,
+    }
+    del args["func"]
+    for key in output_args:
+        if key in args:
+            output_args[key] = args[key]
+            del args[key]
+    output_args = types.SimpleNamespace(**output_args)
+    coro = func(**args)
+    result = asyncio.run(coro)
+    if hasattr(result, "model_dump_json"):
+        result = json.loads(result.model_dump_json())
+    if output_args.output_format == "json":
+        serialized = json.dumps(result, indent=4, sort_keys=True)
+    elif output_args.output_format == "yaml":
+        serialized = yaml.dump(result, default_flow_style=False)[:-1]
+    else:
+        raise NotImplementedError("Can only output JSON and YAML")
+    print(serialized, file=output_args.output_file)
+
+
+def parser_add_argument_lifespan(parser):
     parser.add_argument(
         "--lifespan",
         nargs=2,
@@ -2204,11 +2388,24 @@ def cli():
         help=f"entrypoint.style:path ~/path/to/assocaited/config.json for startup and shutdown async context managers. Yield from to set fastapi|celery.app.state",
     )
 
+
+def cli():
+    # TODO Take sys.argv as args to parse as optional
+    estimated_number_of_workers = number_of_workers()
+
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawTextHelpFormatter
+    )
+    subparsers = parser.add_subparsers(help="sub-command help")
+    parser.set_defaults(func=lambda _: None)
+
     parser_worker = subparsers.add_parser("worker", help="Run Celery worker")
     parser_worker.set_defaults(func=cli_worker)
+    parser_add_argument_lifespan(parser_worker)
 
     parser_api = subparsers.add_parser("api", help="Run API server")
     parser_api.set_defaults(func=cli_api)
+    parser_add_argument_lifespan(parser_api)
     parser_api.add_argument(
         "--bind",
         default="127.0.0.1:8080",
@@ -2230,19 +2427,98 @@ def cli():
         help=f"Entrypoint style paths for PolicyEngineContext.extra_inits",
     )
 
+    parser_client = subparsers.add_parser("client", help="Interact with API")
+    parser_client.set_defaults(func=lambda _args: None)
+    client_subparsers = parser_client.add_subparsers(help="Client")
+    parser_client.add_argument(
+        "--timeout",
+        type=int,
+        default=0,
+        help="Timeout to wait for status to move to complete. 0 is don't wait just check status",
+    )
+    parser_client.add_argument(
+        "--endpoint",
+        "-e",
+        required=True,
+        help="Endpoint to connect to",
+    )
+    parser_client.add_argument(
+        "--output-format",
+        default="json",
+        help="Output format (json, yaml)",
+    )
+    parser_client.add_argument(
+        "--output-file",
+        default=sys.stdout,
+        type=argparse.FileType('w', encoding='UTF-8'),
+        help="Output file",
+    )
+
+    parser_client_create = client_subparsers.add_parser("create", help="Create workflow execution request")
+    parser_client_create.set_defaults(
+        func=lambda args: cli_async_output(client_create, args),
+    )
+    parser_client_create.add_argument(
+        "--input",
+        "-i",
+        nargs=2,
+        action="append",
+        metavar=("key", "value"),
+        default=[],
+        help="Inputs to workflow",
+    )
+    parser_client_create.add_argument(
+        "--context",
+        "-c",
+        type=json.loads,
+        default={},
+        help="JSON string for updates to context",
+    )
+    parser_client_create.add_argument(
+        "--workflow",
+        "-w",
+        required=True,
+        help="Workflow to run",
+    )
+    parser_client_create.add_argument(
+        "--repository",
+        "-R",
+        required=True,
+        help="Repository to run as",
+    )
+
+    parser_client_status = client_subparsers.add_parser("status", help="Status of workflow execution request")
+    parser_client_status.set_defaults(
+        func=lambda args: cli_async_output(client_status, args),
+    )
+    parser_client_status.add_argument(
+        "--task-id",
+        "-t",
+        default=None,
+        help="Task ID to monitor status of",
+    )
+    parser_client_status.add_argument(
+        "--poll-interval-in-seconds",
+        "-p",
+        type=float,
+        default=0.01,
+        help="Time between poll re-request of status route",
+    )
+
     args = parser.parse_args()
 
-    args.lifespan = list(
-        map(
-            lambda arg: arg
-            if isinstance(arg, LifespanCallbackWithConfig)
-            else LifespanCallbackWithConfig(
-                entrypoint_string=arg[0],
-                config_string=arg[1],
-            ),
-            args.lifespan,
+    if hasattr(args, "lifespan"):
+        args.lifespan = list(
+            map(
+                lambda arg: arg
+                if isinstance(arg, LifespanCallbackWithConfig)
+                else LifespanCallbackWithConfig(
+                    entrypoint_string=arg[0],
+                    config_string=arg[1],
+                ),
+                args.lifespan,
+            )
         )
-    )
 
     args.func(args)
 
