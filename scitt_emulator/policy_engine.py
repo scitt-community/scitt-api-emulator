@@ -323,8 +323,8 @@ class PolicyEngineRequest(BaseModel, extra="forbid"):
 
 celery_app = Celery(
     "tasks",
-    backend="redis://localhost",
-    broker="redis://localhost",
+    backend=os.environ.get("CELERY_BACKEND", "redis://localhost"),
+    broker=os.environ.get("CELERY_BROKER", "redis://localhost"),
     broker_connection_retry_on_startup=True,
 )
 
