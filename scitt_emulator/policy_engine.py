@@ -1769,14 +1769,16 @@ async def background_task_celery_worker():
     celery_app.Worker(app=celery_app).start()
 
 
-CELERY_WORKER_EXEC_WITH_PYTHON = r"import scitt_emulator.policy_engine; scitt_emulator.policy_engine.celery_worker_exec_with_python()"
-
 
 def celery_worker_exec_with_python():
     import nest_asyncio
 
     nest_asyncio.apply()
     asyncio.run(background_task_celery_worker())
+
+
+module_name, function_name = make_entrypoint_style_string(celery_worker_exec_with_python).split(":")
+CELERY_WORKER_EXEC_WITH_PYTHON = f"import {module_name}; {module_name}.{function_name}()"
 
 
 @contextlib.contextmanager
