@@ -1422,7 +1422,22 @@ async def async_celery_run_workflow(context, request):
 
 
 async def no_celery_async_celery_run_workflow(context, request):
-    return (await async_celery_run_workflow(context, request)).model_dump_json()
+    try:
+        return (
+            await async_celery_run_workflow(context, request)
+        ).model_dump_json()
+    except Exception as error:
+        traceback.print_exc(file=sys.stderr)
+        detail = PolicyEngineComplete(
+            id="",
+            exit_status=PolicyEngineCompleteExitStatuses.FAILURE,
+            annotations={"error": [str(error)]},
+        )
+        request_status = PolicyEngineStatus(
+            status=PolicyEngineStatuses.COMPLETE,
+            detail=detail,
+        )
+        return request_status.model_dump_json()
 
 
 @celery_task(no_celery_async=no_celery_async_celery_run_workflow)
