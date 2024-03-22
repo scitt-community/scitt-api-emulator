@@ -1247,10 +1247,13 @@ async def lifespan_deno(
 @contextlib.asynccontextmanager
 async def lifespan_nodejs(
     config_string,
-    _app,
+    app,
     _context,
     _state,
 ):
+    if isinstance(app, FastAPI) and not int(os.environ.get("NO_CELERY", "0")):
+        yield
+        return
     nodejs_path = which("node")
     if nodejs_path is not None:
         yield {"nodejs": nodejs_path}
