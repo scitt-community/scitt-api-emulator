@@ -3,7 +3,7 @@
 import base64
 import pathlib
 import argparse
-from typing import Union, Optional
+from typing import Union, Optional, List
 
 import cwt
 import pycose
@@ -32,9 +32,9 @@ class RegInfo(pycose.headers.CoseHeaderAttribute):
 
 
 @pycose.headers.CoseHeaderAttribute.register_attribute()
-class Receipt(pycose.headers.CoseHeaderAttribute):
+class Receipts(pycose.headers.CoseHeaderAttribute):
     identifier = 394
-    fullname = "RECEIPT"
+    fullname = "RECEIPTS"
 
 
 @pycose.headers.CoseHeaderAttribute.register_attribute()
@@ -48,8 +48,9 @@ def create_claim(
     issuer: Union[str, None],
     subject: str,
     content_type: str,
-    payload: str,
+    payload: bytes,
     private_key_pem_path: Optional[str] = None,
+    receipts: Optional[List[bytes]] = None,
 ):
     # https://ietf-wg-scitt.github.io/draft-ietf-scitt-architecture/draft-ietf-scitt-architecture.html#name-signed-statement-envelope
 
@@ -146,8 +147,8 @@ def create_claim(
     unprotected = {
         #   ; TBD, Labels are temporary,
         TBD: "TBD",
-        #   ? 394 => [+ Receipt]
-        Receipt: None,
+        #   ? 394 => [+ Receipts]
+        Receipts: receipts,
     }
     # }
 
@@ -155,7 +156,7 @@ def create_claim(
     msg = pycose.messages.Sign1Message(
         phdr=protected,
         uhdr=unprotected,
-        payload=payload.encode("utf-8"),
+        payload=payload,
     )
 
     # Sign
@@ -183,7 +184,7 @@ def cli(fn):
             args.issuer,
             args.subject,
             args.content_type,
-            args.payload,
+            args.payload.encode("utf-8"),
             private_key_pem_path=args.private_key_pem,
         )
     )

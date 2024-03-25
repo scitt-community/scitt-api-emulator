@@ -19,3 +19,13 @@ def did_web_to_url(
             *[urllib.parse.unquote(i) for i in did_web_string.split(":")[2:]],
         ]
     )
+
+
+def url_to_did_web(url_string):
+    url = urllib.parse.urlparse(url_string)
+    return ":".join(
+        [
+            urllib.parse.quote(i)
+            for i in ["did", "web", url.netloc, *filter(bool, url.path.split("/"))]
+        ]
+    )
