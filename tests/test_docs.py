@@ -23,6 +23,7 @@ from flask import Flask
 import jwcrypto
 
 from scitt_emulator.client import ClaimOperationError
+from scitt_emulator.did_helpers import url_to_did_web
 
 from .test_cli import (
     Service,
@@ -155,15 +156,6 @@ def docutils_find_code_samples(nodes):
         ):
             samples[node.astext()] = nodes[i + 3].astext()
     return samples
-
-def url_to_did_web(url_string):
-    url = urllib.parse.urlparse(url_string)
-    return ":".join(
-        [
-            urllib.parse.quote(i)
-            for i in ["did", "web", url.netloc, *filter(bool, url.path.split("/"))]
-        ]
-    )
 
 def create_flask_app_nop_scitt_scrapi(config):
     # Used to test resolving keys from scrapi
