@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+  pull_request:
+    branches:
+      - main
 
 jobs:
   publish-test-report:
@@ -34,6 +37,7 @@ jobs:
       working-directory: ./postman
 
     - name: Publish to GitHub Pages 🚀
+      if: github.event_name == 'push'
       uses: JamesIves/github-pages-deploy-action@v4
       with:
         folder: docs
