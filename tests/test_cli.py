@@ -155,6 +155,24 @@ def test_client_cli(use_lro: bool, tmp_path):
             receipt_2 = f.read()
         assert receipt == receipt_2
 
+        # create transparent statement
+        command = [
+            "client",
+            "create-claim",
+            "--out",
+            claim_path,
+            "--subject",
+            "test",
+            "--content-type",
+            content_type,
+            "--payload",
+            payload,
+            "--receipts",
+            receipt_path,
+        ]
+        execute_cli(command)
+        assert os.path.exists(claim_path)
+
 
 def create_flask_app_ssh_authorized_keys_server(config):
     app = Flask("ssh_authorized_keys_server")
