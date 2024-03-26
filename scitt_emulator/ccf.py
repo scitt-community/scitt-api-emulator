@@ -78,13 +78,13 @@ class CCFSCITTServiceEmulator(SCITTServiceEmulator):
         key = jwcrypto.jwk.JWK()
         key_bytes = pathlib.Path(self._service_private_key_path).read_bytes()
         key.import_from_pem(key_bytes)
-        return [
-            {
+        return {
+            key.thumbprint(): {
                 **key.export_public(as_dict=True),
                 "use": "sig",
                 "kid": key.thumbprint(),
             }
-        ]
+        }
 
     def create_receipt_contents(self, countersign_tbi: bytes, entry_id: str):
         # Load service private key and certificate

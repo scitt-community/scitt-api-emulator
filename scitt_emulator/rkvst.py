@@ -59,7 +59,7 @@ class RKVSTSCITTServiceEmulator(SCITTServiceEmulator):
         }
 
     def keys_as_jwks(self):
-        return []
+        return {}
 
     def _event_id_to_operation_id(self, event_id: str):
         return event_id.replace('/', '_')

@@ -13,7 +13,6 @@ from pycose.messages import Sign1Message
 import pycose.headers
 
 from scitt_emulator.create_statement import CWTClaims
-from scitt_emulator.verify_statement import verify_statement
 
 # temporary receipt header labels, see draft-birkholz-scitt-receipts
 COSE_Headers_Service_Id = "service_id"

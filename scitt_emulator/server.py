@@ -2,13 +2,19 @@
 # Licensed under the MIT License.
 
 import os
+import json
 from pathlib import Path
 from io import BytesIO
 import random
 
+import jwt.api_jwt
+import jwcrypto.jwt
+import pycose.headers
+from pycose.messages import Sign1Message
 from flask import Flask, request, send_file, make_response, jsonify
 
 from scitt_emulator.tree_algs import TREE_ALGS
+from scitt_emulator.verify_statement import verify_statement
 from scitt_emulator.plugin_helpers import entrypoint_style_load
 from scitt_emulator.scitt import EntryNotFoundError, ClaimInvalidError, OperationNotFoundError
 
