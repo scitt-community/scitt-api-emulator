@@ -5,8 +5,10 @@ from typing import Optional, Tuple
 from pathlib import Path
 from hashlib import sha256
 import datetime
+import pathlib
 import json
 
+import jwcrypto.jwk
 from cryptography.hazmat.primitives.asymmetric import ec, utils
 from cryptography.hazmat.primitives.serialization import (
     Encoding,
@@ -71,6 +73,18 @@ class CCFSCITTServiceEmulator(SCITTServiceEmulator):
         with open(self.service_parameters_path, "w") as f:
             json.dump(self.service_parameters, f)
         print(f"Service parameters written to {self.service_parameters_path}")
+
+    def keys_as_jwks(self):
+        key = jwcrypto.jwk.JWK()
+        key_bytes = pathlib.Path(self._service_private_key_path).read_bytes()
+        key.import_from_pem(key_bytes)
+        return [
+            {
+                **key.export_public(as_dict=True),
+                "use": "sig",
+                "kid": key.thumbprint(),
+            }
+        ]
 
     def create_receipt_contents(self, countersign_tbi: bytes, entry_id: str):
         # Load service private key and certificate

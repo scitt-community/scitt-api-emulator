@@ -91,13 +91,14 @@ They can be used with the built-in server or an external service implementation.
 
     ```sh
     ./scitt-emulator.sh client create-claim \
-        --issuer did:web:example.com \
         --content-type application/json \
+        --subject 'solar' \
         --payload '{"sun": "yellow"}' \
         --out claim.cose
     ```
 
-    _**Note:** The emulator generates an ad-hoc key pair to sign the claim and does not verify claim signatures upon submission._
+    _**Note:** The emulator generates an ad-hoc key pair to sign the claim if
+``--issuer`` and ``--public-key-pem`` are not given. See [Registration Policies](docs/registration_policies.md) docs for more deatiled examples_
 
 2. View the signed claim by uploading `claim.cose` to one of the [CBOR or COSE Debugging Tools](#cose-and-cbor-debugging)
 

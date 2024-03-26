@@ -1,17 +1,17 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 import os
+import io
 import json
 import threading
 import pytest
 import jwt
 import jwcrypto
-from flask import Flask, jsonify
+from flask import Flask, jsonify, send_file
 from werkzeug.serving import make_server
 from scitt_emulator import cli, server
 from scitt_emulator.oidc import OIDCAuthMiddleware
 
-issuer = "did:web:example.com"
 content_type = "application/json"
 payload = '{"foo": "bar"}'
 
@@ -71,8 +71,8 @@ def test_client_cli(use_lro: bool, tmp_path):
             "create-claim",
             "--out",
             claim_path,
-            "--issuer",
-            issuer,
+            "--subject",
+            "test",
             "--content-type",
             content_type,
             "--payload",
@@ -154,6 +154,48 @@ def test_client_cli(use_lro: bool, tmp_path):
         with open(receipt_path_2, "rb") as f:
             receipt_2 = f.read()
         assert receipt == receipt_2
+
+        # create transparent statement
+        command = [
+            "client",
+            "create-claim",
+            "--out",
+            claim_path,
+            "--subject",
+            "test",
+            "--content-type",
+            content_type,
+            "--payload",
+            payload,
+            "--receipts",
+            receipt_path,
+        ]
+        execute_cli(command)
+        assert os.path.exists(claim_path)
+
+
+def create_flask_app_ssh_authorized_keys_server(config):
+    app = Flask("ssh_authorized_keys_server")
+
+    app.config.update(dict(DEBUG=True))
+    app.config.update(config)
+
+    @app.route("/", methods=["GET"])
+    def ssh_public_keys():
+        from cryptography.hazmat.primitives import serialization
+        return send_file(
+            io.BytesIO(
+                serialization.load_pem_public_key(
+                    app.config["key"].export_to_pem(),
+                ).public_bytes(
+                    encoding=serialization.Encoding.OpenSSH,
+                    format=serialization.PublicFormat.OpenSSH,
+                )
+            ),
+            mimetype="text/plain",
+        )
+
+    return app
 
 
 def create_flask_app_oidc_server(config):
@@ -246,8 +288,8 @@ def test_client_cli_token(tmp_path):
                 "create-claim",
                 "--out",
                 claim_path,
-                "--issuer",
-                issuer,
+                "--subject",
+                "test",
                 "--content-type",
                 content_type,
                 "--payload",

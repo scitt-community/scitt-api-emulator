@@ -8,7 +8,7 @@ import time
 
 import httpx
 
-import scitt_emulator.scitt as scitt
+from scitt_emulator import create_statement
 from scitt_emulator.tree_algs import TREE_ALGS
 
 DEFAULT_URL = "http://127.0.0.1:8000"
@@ -70,10 +70,6 @@ class HttpClient:
 
     def post(self, *args, **kwargs):
         return self._request("POST", *args, **kwargs)
-
-
-def create_claim(issuer: str, content_type: str, payload: str, claim_path: Path):
-    scitt.create_claim(claim_path, issuer, content_type, payload)
 
 
 def submit_claim(
@@ -170,16 +166,7 @@ def cli(fn):
     parser = fn(description="Execute client commands")
     sub = parser.add_subparsers(dest="cmd", help="Command to execute", required=True)
 
-    p = sub.add_parser("create-claim", description="Create a fake SCITT claim")
-    p.add_argument("--out", required=True, type=Path)
-    p.add_argument("--issuer", required=True, type=str)
-    p.add_argument("--content-type", required=True, type=str)
-    p.add_argument("--payload", required=True, type=str)
-    p.set_defaults(
-        func=lambda args: scitt.create_claim(
-            args.out, args.issuer, args.content_type, args.payload
-        )
-    )
+    create_statement.cli(sub.add_parser)
 
     p = sub.add_parser(
         "submit-claim", description="Submit a SCITT claim and retrieve the receipt"

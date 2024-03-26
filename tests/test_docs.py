@@ -12,39 +12,44 @@ import textwrap
 import threading
 import itertools
 import subprocess
-import contextlib
-import unittest.mock
+import urllib.parse
+
 import pytest
 import myst_parser.parsers.docutils_
 import docutils.nodes
 import docutils.utils
+from flask import Flask
+
+import jwcrypto
 
 from scitt_emulator.client import ClaimOperationError
+from scitt_emulator.did_helpers import url_to_did_web
 
 from .test_cli import (
     Service,
     content_type,
     payload,
     execute_cli,
+    create_flask_app_oidc_server,
+    create_flask_app_ssh_authorized_keys_server,
 )
 
 
 repo_root = pathlib.Path(__file__).parents[1]
 docs_dir = repo_root.joinpath("docs")
-allowlisted_issuer = "did:web:example.org"
-non_allowlisted_issuer = "did:web:example.com"
+non_allowlisted_issuer = "did:web:denied.example.com"
 CLAIM_DENIED_ERROR = {"type": "denied", "detail": "content_address_of_reason"}
 CLAIM_DENIED_ERROR_BLOCKED = {
     "type": "denied",
     "detail": textwrap.dedent(
         """
-        'did:web:example.com' is not one of ['did:web:example.org']
+        'did:web:denied.example.com' is not one of ['did:web:example.org']
 
         Failed validating 'enum' in schema['properties']['issuer']:
             {'enum': ['did:web:example.org'], 'type': 'string'}
 
         On instance['issuer']:
-            'did:web:example.com'
+            'did:web:denied.example.com'
         """
     ).lstrip(),
 }
@@ -152,13 +157,31 @@ def docutils_find_code_samples(nodes):
             samples[node.astext()] = nodes[i + 3].astext()
     return samples
 
-def test_docs_registration_policies(tmp_path):
+def create_flask_app_nop_scitt_scrapi(config):
+    # Used to test resolving keys from scrapi
+    # /.well-known/transparency-configuration
+    app = Flask("nop")
+
+    app.config.update(dict(DEBUG=True))
+    app.config.update(config)
+
+    return app
+
+@pytest.mark.parametrize(
+    "create_flask_app_notary_identity", [
+        create_flask_app_oidc_server,
+        create_flask_app_ssh_authorized_keys_server,
+        create_flask_app_nop_scitt_scrapi,
+    ],
+)
+def test_docs_registration_policies(create_flask_app_notary_identity, tmp_path):
     workspace_path = tmp_path / "workspace"
 
     claim_path = tmp_path / "claim.cose"
     receipt_path = tmp_path / "claim.receipt.cbor"
     entry_id_path = tmp_path / "claim.entry_id.txt"
     retrieved_claim_path = tmp_path / "claim.retrieved.cose"
+    private_key_pem_path = tmp_path / "notary-private-key.pem"
 
     # Grab code samples from docs
     # TODO Abstract into abitrary docs testing code
@@ -170,11 +193,26 @@ def test_docs_registration_policies(tmp_path):
     for name, content in docutils_find_code_samples(nodes).items():
         tmp_path.joinpath(name).write_text(content)
 
+    key = jwcrypto.jwk.JWK.generate(kty="EC", crv="P-384")
+    # cwt_cose_key = cwt.COSEKey.generate_symmetric_key(alg=alg, kid=kid)
+    private_key_pem_path.write_bytes(
+        key.export_to_pem(private_key=True, password=None),
+    )
+    algorithm = "ES384"
+    audience = "scitt.example.org"
+    subject = "repo:scitt-community/scitt-api-emulator:ref:refs/heads/main"
+
+    # tell jsonschema_validator.py that we want to assume non-TLS URLs for tests
+    os.environ["DID_WEB_ASSUME_SCHEME"] = "http"
+
     with Service(
+        {"key": key, "algorithms": [algorithm]},
+        create_flask_app=create_flask_app_notary_identity,
+    ) as oidc_service, Service(
         {
             "tree_alg": "CCF",
             "workspace": workspace_path,
-            "error_rate": 0.1,
+            "error_rate": 0,
             "use_lro": True,
         }
     ) as service, SimpleFileBasedPolicyEngine(
@@ -188,21 +226,40 @@ def test_docs_registration_policies(tmp_path):
         # set the policy to enforce
         service.server.app.scitt_service.service_parameters["insertPolicy"] = "external"
 
-        # create denied claim
+        if create_flask_app_nop_scitt_scrapi is create_flask_app_notary_identity:
+            # set the issuer to the SCITT SCRAPI service
+            issuer = url_to_did_web(service.url)
+            # use private key from SCITT SCRAPI service to sign
+            private_key_pem_path = workspace_path.joinpath("storage", "service_private_key.pem")
+        else:
+            # set the issuer to the did:web version of the OIDC / SSH keys service
+            issuer = url_to_did_web(oidc_service.url)
+
+        # create claim
         command = [
             "client",
             "create-claim",
             "--out",
             claim_path,
             "--issuer",
-            non_allowlisted_issuer,
+            issuer,
+            "--subject",
+            subject,
             "--content-type",
             content_type,
             "--payload",
             payload,
+            "--private-key-pem",
+            private_key_pem_path,
         ]
         execute_cli(command)
         assert os.path.exists(claim_path)
+
+        # replace example issuer with test OIDC service issuer (URL) in error
+        claim_denied_error_blocked = copy.deepcopy(CLAIM_DENIED_ERROR_BLOCKED)
+        claim_denied_error_blocked["detail"] = claim_denied_error_blocked["detail"].replace(
+            "did:web:denied.example.com", issuer,
+        )
 
         # submit denied claim
         command = [
@@ -224,25 +281,18 @@ def test_docs_registration_policies(tmp_path):
             check_error = error
         assert check_error
         assert "error" in check_error.operation
-        assert check_error.operation["error"] == CLAIM_DENIED_ERROR_BLOCKED
+        if check_error.operation["error"] != claim_denied_error_blocked:
+            raise check_error
         assert not os.path.exists(receipt_path)
         assert not os.path.exists(entry_id_path)
 
-        # create accepted claim
-        command = [
-            "client",
-            "create-claim",
-            "--out",
-            claim_path,
-            "--issuer",
-            allowlisted_issuer,
-            "--content-type",
-            content_type,
-            "--payload",
-            payload,
-        ]
-        execute_cli(command)
-        assert os.path.exists(claim_path)
+        # replace example issuer with test OIDC service issuer in allowlist
+        allowlist_schema_json_path = tmp_path.joinpath("allowlist.schema.json")
+        allowlist_schema_json_path.write_text(
+            allowlist_schema_json_path.read_text().replace(
+                "did:web:example.org", issuer,
+            )
+        )
 
         # submit accepted claim
         command = [
@@ -259,4 +309,6 @@ def test_docs_registration_policies(tmp_path):
         ]
         execute_cli(command)
         assert os.path.exists(receipt_path)
+        receipt_path.unlink()
         assert os.path.exists(entry_id_path)
+        receipt_path.unlink(entry_id_path)

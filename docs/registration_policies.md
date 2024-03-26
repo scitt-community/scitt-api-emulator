@@ -12,14 +12,14 @@ The SCITT API emulator can deny entry based on presence of
 This is a simple way to enable evaluation of claims prior to submission by
 arbitrary policy engines which watch the workspace (fanotify, inotify, etc.).
 
-[![asciicast-of-simple-decoupled-file-based-policy-engine](https://asciinema.org/a/572766.svg)](https://asciinema.org/a/572766)
+[![asciicast-of-simple-decoupled-file-based-policy-engine](https://asciinema.org/a/620587.svg)](https://asciinema.org/a/620587)
 
 Start the server
 
 ```console
 $ rm -rf workspace/
 $ mkdir -p workspace/storage/operations
-$ scitt-emulator server --workspace workspace/ --tree-alg CCF --use-lro
+$ timeout 1s scitt-emulator server --workspace workspace/ --tree-alg CCF --use-lro
 Service parameters: workspace/service_parameters.json
 ^C
 ```
@@ -84,43 +84,66 @@ import os
 import sys
 import json
 import pathlib
-import traceback
+import unittest
 
-import cbor2
+import cwt
 import pycose
+from pycose.messages import Sign1Message
 from jsonschema import validate, ValidationError
-from pycose.messages import CoseMessage, Sign1Message
 
-from scitt_emulator.scitt import ClaimInvalidError, COSE_Headers_Issuer
+from scitt_emulator.scitt import ClaimInvalidError, CWTClaims
+from scitt_emulator.verify_statement import verify_statement
+from scitt_emulator.key_helpers import verification_key_to_object
 
-claim = sys.stdin.buffer.read()
 
-msg = CoseMessage.decode(claim)
+def main():
+    claim = sys.stdin.buffer.read()
 
-if pycose.headers.ContentType not in msg.phdr:
-    raise ClaimInvalidError("Claim does not have a content type header parameter")
-if COSE_Headers_Issuer not in msg.phdr:
-    raise ClaimInvalidError("Claim does not have an issuer header parameter")
+    msg = Sign1Message.decode(claim, tag=True)
 
-if not msg.phdr[pycose.headers.ContentType].startswith("application/json"):
-    raise TypeError(
-        f"Claim content type does not start with application/json: {msg.phdr[pycose.headers.ContentType]!r}"
+    if pycose.headers.ContentType not in msg.phdr:
+        raise ClaimInvalidError("Claim does not have a content type header parameter")
+    if not msg.phdr[pycose.headers.ContentType].startswith("application/json"):
+        raise TypeError(
+            f"Claim content type does not start with application/json: {msg.phdr[pycose.headers.ContentType]!r}"
+        )
+
+    verification_key = verify_statement(msg)
+    unittest.TestCase().assertTrue(
+        verification_key,
+        "Failed to verify signature on statement",
     )
 
-SCHEMA = json.loads(pathlib.Path(os.environ["SCHEMA_PATH"]).read_text())
+    cwt_protected = cwt.decode(msg.phdr[CWTClaims], verification_key.cwt)
+    issuer = cwt_protected[1]
+    subject = cwt_protected[2]
 
-try:
-    validate(
-        instance={
-            "$schema": "https://schema.example.com/scitt-policy-engine-jsonschema.schema.json",
-            "issuer": msg.phdr[COSE_Headers_Issuer],
-            "claim": json.loads(msg.payload.decode()),
-        },
-        schema=SCHEMA,
+    issuer_key_as_object = verification_key_to_object(verification_key)
+    unittest.TestCase().assertTrue(
+        issuer_key_as_object,
+        "Failed to convert issuer key to JSON schema verifiable object",
     )
-except ValidationError as error:
-    print(str(error), file=sys.stderr)
-    sys.exit(1)
+
+    SCHEMA = json.loads(pathlib.Path(os.environ["SCHEMA_PATH"]).read_text())
+
+    try:
+        validate(
+            instance={
+                "$schema": "https://schema.example.com/scitt-policy-engine-jsonschema.schema.json",
+                "issuer": issuer,
+                "issuer_key": issuer_key_as_object,
+                "subject": subject,
+                "claim": json.loads(msg.payload.decode()),
+            },
+            schema=SCHEMA,
+        )
+    except ValidationError as error:
+        print(str(error), file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
 ```
 
 We'll create a small wrapper to serve in place of a more fully featured policy
@@ -140,21 +163,134 @@ echo ${CLAIM_PATH}
 Example running allowlist check and enforcement.
 
 ```console
-npm install -g nodemon
-nodemon -e .cose --exec 'find workspace/storage/operations -name \*.cose -exec nohup sh -xe policy_engine.sh $(cat workspace/service_parameters.json | jq -r .insertPolicy) {} \;'
+$ npm install nodemon && \
+  DID_WEB_ASSUME_SCHEME=http node_modules/.bin/nodemon -e .cose --exec 'find workspace/storage/operations -name \*.cose -exec nohup sh -xe policy_engine.sh $(cat workspace/service_parameters.json | jq -r .insertPolicy) {} \;'
 ```
 
 Also ensure you restart the server with the new config we edited.
 
 ```console
-scitt-emulator server --workspace workspace/ --tree-alg CCF --use-lro
+$ scitt-emulator server --workspace workspace/ --tree-alg CCF --use-lro
 ```
 
-Create claim from allowed issuer (`.org`) and from non-allowed (`.com`).
+The current emulator notary (create-statement) implementation will sign
+statements using a generated ephemeral key or a key we provide via the
+`--private-key-pem` argument.
+
+Since we need to export the key for verification by the policy engine, we will
+first generate it using `ssh-keygen`.
 
 ```console
-$ scitt-emulator client create-claim --issuer did:web:example.com --content-type application/json --payload '{"sun": "yellow"}' --out claim.cose
-A COSE-signed Claim was written to:  claim.cose
+$ export ISSUER_PORT="9000" \
+  && export ISSUER_URL="http://localhost:${ISSUER_PORT}" \
+  && ssh-keygen -q -f /dev/stdout -t ecdsa -b 384 -N '' -I $RANDOM <<<y 2>/dev/null | python -c 'import sys; from cryptography.hazmat.primitives import serialization; print(serialization.load_ssh_private_key(sys.stdin.buffer.read(), password=None).private_bytes(encoding=serialization.Encoding.PEM, format=serialization.PrivateFormat.PKCS8, encryption_algorithm=serialization.NoEncryption()).decode().rstrip())' > private-key.pem \
+  && scitt-emulator client create-claim \
+    --private-key-pem private-key.pem \
+    --issuer "${ISSUER_URL}" \
+    --subject "solar" \
+    --content-type application/json \
+    --payload '{"sun": "yellow"}' \
+    --out claim.cose
+```
+
+The core of policy engine we implemented in `jsonschema_validator.py` will
+verify the COSE message generated using the public portion of the notary's key.
+We've implemented two possible styles of key resolution. Both of them require
+resolution of public keys via an HTTP server.
+
+Let's start the HTTP server now, we'll populate the needed files in the
+sections corresponding to each resolution style.
+
+```console
+$ python -m http.server "${ISSUER_PORT}" &
+$ python_http_server_pid=$!
+```
+
+### SSH `authorized_keys` style notary public key resolution
+
+Keys are discovered via making an HTTP GET request to the URL given by the
+`issuer` parameter via the `web` DID method and de-serializing the SSH
+public keys found within the response body.
+
+GitHub exports a users authentication keys at https://github.com/username.keys
+Leveraging this URL as an issuer `did:web:github.com:username.keys` with the
+following pattern would enable a GitHub user to act as a SCITT notary.
+
+Start an HTTP server with an SSH public key served at the root.
+
+```console
+$ cat private-key.pem | ssh-keygen -f /dev/stdin -y | tee index.html
+```
+
+### OpenID Connect token style notary public key resolution
+
+Keys are discovered two part resolution of HTTP paths relative to the issuer
+
+`/.well-known/openid-configuration` path is requested via HTTP GET. The
+response body is parsed as JSON and the value of the `jwks_uri` key is
+requested via HTTP GET.
+
+`/.well-known/jwks` (is typically the value of `jwks_uri`) path is requested
+via HTTP GET. The response body is parsed as JSON. Public keys are loaded
+from the value of the `keys` key which stores an array of JSON Web Key (JWK)
+style serializations.
+
+```console
+$ mkdir -p .well-known/
+$ cat > .well-known/openid-configuration <<EOF
+{
+    "issuer": "${ISSUER_URL}",
+    "jwks_uri": "${ISSUER_URL}/.well-known/jwks",
+    "response_types_supported": ["id_token"],
+    "claims_supported": ["sub", "aud", "exp", "iat", "iss"],
+    "id_token_signing_alg_values_supported": ["ES384"],
+    "scopes_supported": ["openid"]
+}
+EOF
+$ cat private-key.pem | python -c 'import sys, json, jwcrypto.jwt; key = jwcrypto.jwt.JWK(); key.import_from_pem(sys.stdin.buffer.read()); print(json.dumps({"keys":[{**key.export_public(as_dict=True),"use": "sig","kid": key.thumbprint()}]}, indent=4, sort_keys=True))' | tee .well-known/jwks
+{
+    "keys": [
+        {
+            "crv": "P-384",
+            "kid": "y96luxaBaw6FeWVEMti_iqLWPSYk8cKLzZG8X45PA2k",
+            "kty": "EC",
+            "use": "sig",
+            "x": "ZQazDzYmcMHF5Dstkbw7SwWvR_oXQHFS-TLppri-0xDby8TmCpzHyr6TH03CLBxj",
+            "y": "lsIbRskEv06Rf0vttkB3vpXdZ-a50ck74MVyRwOvN55P4s8usQAm3PY1KnAgWtHF"
+        }
+    ]
+}
+```
+
+### SCITT SRCAPI transparency configuration public key resolution
+
+Keys are discovered via making an HTTP GET request to the URL given by the
+`issuer` parameter with `/.well-known/transparency-configuration` as the path
+component. Public keys found within the response body's JSON `jwks.keys` array.
+
+- [`https://transparency.example/.well-known/transparency-configuration`](https://ietf-wg-scitt.github.io/draft-ietf-scitt-scrapi/draft-ietf-scitt-scrapi.html#name-transparency-configuration)
+
+To use this method of resolution create the statement using the FQDN of the
+SCITT SCRAPI service as the issuer. Also ensure you use it's private key to
+sign.
+
+```console
+$ scitt-emulator client create-claim \
+    --private-key-pem workspace/storage/service_private_key.pem \
+    --issuer "http://localhost:8000" \
+    --subject "solar" \
+    --content-type application/json \
+    --payload '{"sun": "yellow"}' \
+    --out claim.cose
+```
+
+### Policy engine executing allowlist policy on denied issuer
+
+Attempt to submit the statement we created. You should see that due to our
+current `allowlist.schema.json` the Transparency Service denied the insertion
+of the statement into the log.
+
+```console
 $ scitt-emulator client submit-claim --claim claim.cose --out claim.receipt.cbor
 Traceback (most recent call last):
   File "/home/alice/.local/bin/scitt-emulator", line 33, in <module>
@@ -174,10 +310,29 @@ Failed validating 'enum' in schema['properties']['issuer']:
 
 On instance['issuer']:
     'did:web:example.com'
+```
 
-$ scitt-emulator client create-claim --issuer did:web:example.org --content-type application/json --payload '{"sun": "yellow"}' --out claim.cose
-A COSE signed Claim was written to:  claim.cose
+### Policy engine executing allowlist policy on allowed issuer
+
+Modify the allowlist to ensure that our issuer, aka our local HTTP server with
+our keys, is set to be the allowed issuer.
+
+```console
+$ export allowlist="$(cat allowlist.schema.json)" && \
+    jq '.properties.issuer.enum = [env.ISSUER_URL, "http://localhost:8000"]' <(echo "${allowlist}") \
+    | tee allowlist.schema.json
+```
+
+Submit the statement from the issuer we just added to the allowlist.
+
+```console
 $ scitt-emulator client submit-claim --claim claim.cose --out claim.receipt.cbor
 Claim registered with entry ID 1
 Receipt written to claim.receipt.cbor
+```
+
+Stop the server that serves the public keys
+
+```console
+$ kill $python_http_server_pid
 ```

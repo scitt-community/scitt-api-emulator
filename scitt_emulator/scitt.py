@@ -4,19 +4,16 @@
 from typing import Optional
 from abc import ABC, abstractmethod
 from pathlib import Path
-import contextlib
 import time
 import json
 import uuid
 
 import cbor2
-from pycose.messages import CoseMessage, Sign1Message
+from pycose.messages import Sign1Message
 import pycose.headers
-from pycose.keys.ec2 import EC2Key
-import pycose.keys.curves
 
-# temporary claim header labels, see draft-birkholz-scitt-architecture
-COSE_Headers_Issuer = 391
+from scitt_emulator.create_statement import CWTClaims
+from scitt_emulator.verify_statement import verify_statement
 
 # temporary receipt header labels, see draft-birkholz-scitt-receipts
 COSE_Headers_Service_Id = "service_id"
@@ -61,6 +58,10 @@ class SCITTServiceEmulator(ABC):
 
     @abstractmethod
     def initialize_service(self):
+        raise NotImplementedError
+
+    @abstractmethod
+    def keys_as_jwks(self):
         raise NotImplementedError
 
     @abstractmethod
@@ -225,7 +226,7 @@ class SCITTServiceEmulator(ABC):
         # Note: This emulator does not verify the claim signature and does not apply
         # registration policies.
         try:
-            msg = CoseMessage.decode(claim)
+            msg = Sign1Message.decode(claim, tag=True)
         except:
             raise ClaimInvalidError("Claim is not a valid COSE message")
         if not isinstance(msg, Sign1Message):
@@ -236,10 +237,8 @@ class SCITTServiceEmulator(ABC):
             raise ClaimInvalidError(
                 "Claim does not have a content type header parameter"
             )
-        if COSE_Headers_Issuer not in msg.phdr:
-            raise ClaimInvalidError("Claim does not have an issuer header parameter")
-        if not isinstance(msg.phdr[COSE_Headers_Issuer], str):
-            raise ClaimInvalidError("Claim issuer is not a string")
+        if CWTClaims not in msg.phdr:
+            raise ClaimInvalidError("Claim does not have a CWTClaims header parameter")
 
         # Extract fields of COSE_Sign1 for countersigning
         outer = cbor2.loads(claim)
@@ -302,28 +301,6 @@ class SCITTServiceEmulator(ABC):
         assert tree_alg == self.tree_alg
 
         self.verify_receipt_contents(receipt_contents, countersign_tbi)
-
-
-def create_claim(claim_path: Path, issuer: str, content_type: str, payload: str):
-    # Create COSE_Sign1 structure
-    protected = {
-        pycose.headers.Algorithm: "ES256",
-        pycose.headers.ContentType: content_type,
-        COSE_Headers_Issuer: issuer,
-    }
-    msg = Sign1Message(phdr=protected, payload=payload.encode("utf-8"))
-
-    # Create an ad-hoc key
-    # Note: The emulator does not validate signatures, hence the short-cut.
-    key = EC2Key.generate_key(pycose.keys.curves.P256)
-
-    # Sign
-    msg.key = key
-    claim = msg.encode(tag=True)
-
-    with open(claim_path, "wb") as f:
-        f.write(claim)
-    print(f"A COSE signed Claim was written to:  {claim_path}")
 
 
 def create_countersign_to_be_included(
