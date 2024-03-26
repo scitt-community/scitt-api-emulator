@@ -19,7 +19,7 @@
 				"body": {
 					"mode": "file",
 					"file": {
-						"src": "./claim.cose"
+						"src": "./statement.cbor"
 					}
 				},
 				"url": {
