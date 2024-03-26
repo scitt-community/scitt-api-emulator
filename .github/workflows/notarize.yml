@@ -31,11 +31,6 @@ on:
         description: 'Subject for statement'
         default: ''
         type: string
-  pull_request:
-    branches:
-      - main
-    paths-ignore:
-      - '**.md'
 
 jobs:
   notarize:
