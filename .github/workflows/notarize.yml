@@ -15,6 +15,10 @@ on:
         description: 'Payload for claim'
         default: ''
         type: string
+      subject:
+        description: 'Subject for statement'
+        default: ''
+        type: string
   workflow_call:
     inputs:
       scitt-url:
@@ -22,6 +26,10 @@ on:
         type: string
       payload:
         description: 'Payload for claim'
+        type: string
+      subject:
+        description: 'Subject for statement'
+        default: ''
         type: string
 
 jobs:
@@ -32,6 +40,7 @@ jobs:
     env:
       SCITT_URL: '${{ inputs.scitt-url || github.event.inputs.scitt-url }}'
       PAYLOAD: '${{ inputs.payload || github.event.inputs.payload }}'
+      SUBJECT: '${{ inputs.subject || github.event.inputs.subject }}'
     steps:
       - name: Set defaults if env vars not set (as happens with on.push trigger)
         run: |
@@ -40,6 +49,9 @@ jobs:
           fi
           if [[ "x${PAYLOAD}" = "x" ]]; then
             echo 'PAYLOAD={"key": "value"}' >> "${GITHUB_ENV}"
+          fi
+          if [[ "x${SUBJECT}" = "x" ]]; then
+            echo 'SUBJECT=subject:value' >> "${GITHUB_ENV}"
           fi
       - uses: actions/checkout@v4
       - name: Set up Python 3.8
@@ -62,7 +74,7 @@ jobs:
             core.setOutput('token', await core.getIDToken(SCITT_URL));
       - name: Create claim
         run: |
-          scitt-emulator client create-claim --issuer did:web:example.org --content-type application/json --payload "${PAYLOAD}" --out claim.cose
+          scitt-emulator client create-claim --issuer did:web:example.org --subject "${SUBJECT}" --content-type application/json --payload "${PAYLOAD}" --out claim.cose
       - name: Submit claim
         env:
           OIDC_TOKEN: '${{ steps.github-oidc.outputs.token }}'
