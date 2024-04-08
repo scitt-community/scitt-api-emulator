@@ -20,6 +20,9 @@ inputs:
   scitt-url:
     description: 'URL of scitt instance'
     required: true
+  scitt-pip-install:
+    description: 'Argument to pass to pip to install scitt-emulator Python package (defaults to main.tar.gz of upstream repo)'
+    default: 'https://github.com/scitt-community/scitt-api-emulator/archive/refs/heads/main.tar.gz'
 outputs:
   entry-id:
     description: "Entry ID of submitted statement"
@@ -27,6 +30,19 @@ outputs:
 runs:
   using: "composite"
   steps:
+    - uses: actions/setup-python@v5
+      id: setup-python
+      with:
+        python-version: '3.12'
+        update-environment: false
+    - name: "Install Dependencies"
+      shell: bash -xeuo pipefail {0}
+      env:
+        SCITT_PIP_INSTALL: ${{ inputs.scitt-pip-install }}
+      run: |
+        export LD_LIBRARY_PATH="$(dirname $(dirname ${{ steps.setup-python.outputs.python-path }}))/lib:${LD_LIBRARY_PATH}"
+        echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH}" >> $GITHUB_ENV
+        ${{ steps.setup-python.outputs.python-path }} -m pip install "${SCITT_PIP_INSTALL}"
     - name: Create statement
       shell: bash -xeuo pipefail {0}
       env:
@@ -36,12 +52,12 @@ runs:
         PRIVATE_KEY_PEM: ${{ inputs.private-key-pem }}
         PAYLOAD_CONTENT_TYPE: ${{ inputs.payload-content-type }}
       run: |
-        scitt-emulator client create-claim --issuer "${ISSUER}" --subject "${SUBJECT}" --content-type "${PAYLOAD_CONTENT_TYPE}" --payload "${PAYLOAD}" --out statement.cbor --private-key-pem "${PRIVATE_KEY_PEM}"
+        "$(dirname ${{ steps.setup-python.outputs.python-path }})/scitt-emulator" client create-claim --issuer "${ISSUER}" --subject "${SUBJECT}" --content-type "${PAYLOAD_CONTENT_TYPE}" --payload "${PAYLOAD}" --out statement.cbor --private-key-pem "${PRIVATE_KEY_PEM}"
     - name: Submit statement
       shell: bash -xeuo pipefail {0}
       id: submit-statement
       env:
         SCITT_URL: ${{ inputs.scitt-url }}
       run: |
-        scitt-emulator client submit-claim --url "${SCITT_URL}" --claim statement.cbor --out statement.receipt.cbor 2>&1 | tee >(grep Entry\ ID: | awk '{print $NF}' > entry_id.txt)
+        "$(dirname ${{ steps.setup-python.outputs.python-path }})/scitt-emulator" client submit-claim --url "${SCITT_URL}" --claim statement.cbor --out statement.receipt.cbor 2>&1 | tee >(grep Entry\ ID: | awk '{print $NF}' > entry_id.txt)
         echo "entry-id=$(cat entry_id.txt)" >> "${GITHUB_OUTPUT}"
