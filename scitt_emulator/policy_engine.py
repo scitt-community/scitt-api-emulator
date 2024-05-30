@@ -878,12 +878,12 @@ def step_parse_outputs_github_actions(context, step, step_outputs_string):
     current_output_delimiter = None
     current_output_value = ""
     for line in step_outputs_string.split("\n"):
-        if "=" in line:
+        if "=" in line and not current_output_key:
             current_output_key, current_output_value = line.split(
                 "=", maxsplit=1
             )
             outputs[current_output_key] = current_output_value
-        elif "<<" in line:
+        elif "<<" in line and not current_output_key:
             current_output_key, current_output_delimiter = line.split(
                 "<<", maxsplit=1
             )
