@@ -34,6 +34,7 @@ setup(
         "cwt",
         "jwcrypto",
         "pycose",
+        # TODO TODO NOTE XXX NOTE Convert aiohttp into httpx NOTE XXX TODO TODO
         "httpx",
         "flask",
         "rkvst-archivist"
