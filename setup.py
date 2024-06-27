@@ -34,7 +34,6 @@ setup(
         "cwt",
         "jwcrypto",
         "pycose",
-        # TODO TODO NOTE XXX NOTE Convert aiohttp into httpx NOTE XXX TODO TODO
         "httpx",
         "flask",
         "rkvst-archivist"
@@ -44,6 +43,16 @@ setup(
             "PyJWT",
             "jwcrypto",
             "jsonschema",
-        ]
+        ],
+        "policy-engine-github-actions": [
+            # TODO NOTE XXX NOTE Convert aiohttp into httpx NOTE XXX NOTE TODO
+            "aiohttp",
+            "gidgethub",
+            "gunicorn",
+            "celery[redis]",
+            "fastapi",
+            "cachetools",
+            # TODO package deno
+        ],
     },
 )
