@@ -131,8 +131,34 @@ jsonschema -i <(cat request.yml | python -c 'import json, yaml, sys; print(json.
 
 TASK_ID=$(curl -X POST -H "Content-Type: application/json" -d @<(cat request.yml | python -c 'import json, yaml, sys; print(json.dumps(yaml.safe_load(sys.stdin.read()), indent=4, sort_keys=True))') http://localhost:8080/request/create  | jq -r .detail.id)
 curl http://localhost:8080/request/status/$TASK_ID | jq
+```
 
-TASK_ID=$(curl -X POST http://localhost:8080/webhook/github -d '{"after": "a1b70ee3b0343adc24e3b75314262e43f5c79cc2", "repository": {"full_name": "pdxjohnny/scitt-api-emulator"}, "sender": {"login": "pdxjohnny"}}' -H "X-GitHub-Event: push" -H "X-GitHub-Delivery: 42" -H "Content-Type: application/json"  | jq -r .detail.id)
+For webhook responses:
+
+**request-webhook.yml**
+
+```yaml
+after: 222d0403b29c4da9bfcd838d711b9746e73ea226
+repository:
+  full_name: "scitt-community/scitt-api-emulator"
+sender:
+  login: pdxjohnny
+  webhook_workflow: |
+    on:
+      push:
+        branches:
+        - main
+
+    jobs:
+      lint:
+        runs-on: ubuntu-latest
+        steps:
+        - run: |
+          echo Hi
+```
+
+```bash
+TASK_ID=$(curl -X POST http://localhost:8080/webhook/github -H "X-GitHub-Event: push" -H "X-GitHub-Delivery: 42" -H "Content-Type: application/json" -d @<(cat request-webhook.yml | python -c 'import json, yaml, sys; print(json.dumps(yaml.safe_load(sys.stdin.read()), indent=4, sort_keys=True))') | jq -r .detail.id)
 curl http://localhost:8080/request/status/$TASK_ID | jq
 ```
 
@@ -2315,22 +2341,25 @@ async def check_suite_requested_triggers_run_workflows(
                         },
                     },
                     # TODO workflow router to specify which webhook trigger which workflows
-                    workflow=textwrap.dedent(
-                        """
-                        name: 'My Cool Status Check'
-                        on:
-                          push:
-                            branches:
-                            - main
+                    workflow=event.data["sender"].get(
+                        "webhook_workflow",
+                        textwrap.dedent(
+                            """
+                            name: 'My Cool Status Check'
+                            on:
+                              push:
+                                branches:
+                                - main
 
-                        jobs:
-                          test:
-                            runs-on: self-hosted
-                            steps:
-                            - uses: actions/checkout@v4
-                            - run: |
-                                echo Hello World
-                        """
+                            jobs:
+                              test:
+                                runs-on: self-hosted
+                                steps:
+                                - uses: actions/checkout@v4
+                                - run: |
+                                    echo Hello World
+                            """
+                        ),
                     ),
                 ).model_dump_json(),
                 event.__dict__,
