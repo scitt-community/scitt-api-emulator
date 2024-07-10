@@ -93,7 +93,10 @@ Usage without Celery:
 Terminal 1:
 
 ```bash
-GITHUB_TOKEN=$(gh auth token) NO_CELERY=1 ./scitt_emulator/policy_engine.py --workers 1
+echo For GitHub App
+NO_CELERY=1 ./scitt_emulator/policy_engine.py api --lifespan scitt_emulator.policy_engine:lifespan_github_app_gidgethub github_app.yaml --workers 1
+echo OR for token (need commit status: write)
+GITHUB_TOKEN=$(gh auth token) NO_CELERY=1 ./scitt_emulator/policy_engine.py api --workers 1
 ```
 
 **request.yml**
@@ -1443,7 +1446,7 @@ async def gidgethub_get_access_token(context, request):
         context.state.gidgethub,
         installation_id=installation_id,
         app_id=context.state.github_app.app_id,
-        private_key=context.state.ggithub_app.private_key,
+        private_key=context.state.github_app.private_key,
     )
     result["installation"] = data
     return result
