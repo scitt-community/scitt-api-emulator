@@ -144,6 +144,7 @@ repository:
 sender:
   login: pdxjohnny
   webhook_workflow: |
+    name: 'Webhook Workflow Name'
     on:
       push:
         branches:
@@ -154,7 +155,7 @@ sender:
         runs-on: ubuntu-latest
         steps:
         - run: |
-          echo Hi
+            echo ::error path=test.py::Hi
 ```
 
 ```bash
@@ -213,6 +214,7 @@ python -u ./scitt_emulator/policy_engine.py client --endpoint http://localhost:8
 """
 import os
 import io
+import re
 import sys
 import json
 import time
@@ -473,11 +475,12 @@ class GitHubWebhookEventSender(BaseModel):
 
         jobs:
           test:
+            name: "My Job"
             runs-on: self-hosted
             steps:
-            - uses: actions/checkout@v4
             - run: |
-                echo Hello World
+                # https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions
+                echo "::error file=app.js,line=1,col=5,endColumn=7::Missing semicolon"
         """
     )
 
@@ -1019,6 +1022,52 @@ def step_io_update_stack_output_and_env_github_actions(context, request, step):
     stack["env"].update(context_env_updates)
 
 
+def step_parse_annotations_github_actions_line(context, step, line):
+    line = line.strip().strip("::")
+    annotation_level, message = line.split("::", maxsplit=1)
+    details = {
+        "message": message,
+        "raw_details": line,
+    }
+    if " " in annotation_level:
+        annotation_level, details_string = annotation_level.split(" ", maxsplit=1)
+        details.update(urllib.parse.parse_qsl(details_string.replace(",", "&")))
+        details["annotation_level"] = annotation_level
+        details_items = list(details.items())
+        for key, value in details_items:
+            del details[key]
+            key = re.sub(r'(?<!^)(?=[A-Z])', '_', key).lower()
+            details[key] = value
+    return GitHubCheckSuiteAnnotation.model_validate(details)
+
+
+def step_parse_annotations_github_actions(context, step, step_annotations_string):
+    # TODO Groups
+    # https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#grouping-log-lines
+    return [
+        step_parse_annotations_github_actions_line(
+            context,
+            step,
+            line,
+        )
+        for line in step_annotations_string.split("\n")
+        if line.startswith("::")
+    ]
+
+
+def step_io_update_stack_annotations_github_actions(context, request, step):
+    stack = request.context["stack"][-1]
+    for annotation in itertools.chain(
+        step_parse_annotations_github_actions(
+            context,
+            step,
+            pathlib.Path(stack["console_output"]).read_text(),
+        )
+    ):
+        stack["annotations"].setdefault(annotation.annotation_level, [])
+        stack["annotations"][annotation.annotation_level].append(annotation)
+
+
 def execute_step_uses(context, request, step):
     stack = request.context["stack"][-1]
 
@@ -1056,6 +1105,11 @@ def execute_step_uses(context, request, step):
                 env=env,
             )
             step_io_update_stack_output_and_env_github_actions(
+                context,
+                request,
+                step,
+            )
+            step_io_update_stack_annotations_github_actions(
                 context,
                 request,
                 step,
@@ -1151,6 +1205,11 @@ def execute_step_run(context, request, step):
             request,
             step,
         )
+        step_io_update_stack_annotations_github_actions(
+            context,
+            request,
+            step,
+        )
 
         try:
             completed_proc.check_returncode()
@@ -1230,6 +1289,9 @@ def celery_run_workflow_context_stack_push(context, request, stack):
 def celery_run_workflow_context_stack_pop(context, request):
     # TODO Deal with ordering of lines by time, logging module?
     popped_stack = request.context["stack"].pop()
+    for annotation in itertools.chain(*popped_stack["annotations"].values()):
+        request.context["annotations"].setdefault(annotation.annotation_level, [])
+        request.context["annotations"][annotation.annotation_level].append(annotation)
     request.context["console_output"].append(
         [
             popped_stack["stack_path"],
@@ -1283,6 +1345,8 @@ async def celery_run_workflow_context_init(
         request.context["stack"] = []
     if force_init or "console_output" not in request.context:
         request.context["console_output"] = []
+    if force_init or "annotations" not in request.context:
+        request.context["annotations"] = {}
     if force_init or "_init" not in request.context:
         request.context["_init"] = True
         for extra_init in context.extra_inits:
@@ -1717,11 +1781,11 @@ async def async_celery_run_workflow(context, request):
                     job_error = Exception(job_error)
                 raise job_error
 
-
     detail = PolicyEngineComplete(
         id="",
         exit_status=PolicyEngineCompleteExitStatuses.SUCCESS,
         outputs={},
+        annotations=request.context["annotations"],
     )
     request_status = PolicyEngineStatus(
         status=PolicyEngineStatuses.COMPLETE,
@@ -2168,13 +2232,13 @@ cache = cachetools.LRUCache(maxsize=500)
 
 
 class GitHubCheckSuiteAnnotation(BaseModel):
-    path: str
-    annotation_level: str
-    title: str
-    message: str
-    raw_details: str
-    start_line: int
-    end_line: int
+    path: str = ""
+    annotation_level: str = ""
+    title: str = ""
+    message: str = ""
+    raw_details: str = ""
+    start_line: int = 0
+    end_line: int = 0
 
 
 async def async_workflow_run_github_app_gidgethub(
@@ -2247,17 +2311,6 @@ async def async_workflow_run_github_app_gidgethub(
         warning_count = 0
         notice_count = 0
         annotations = []
-        annotations.append(
-            GitHubCheckSuiteAnnotation(
-                path="somepath",
-                annotation_level="warning",
-                title="",
-                message="",
-                raw_details="",
-                start_line=0,
-                end_line=0,
-            )
-        )
 
         if hasattr(context.state, "github_app"):
             # GitHub App, use check-runs API
@@ -2274,12 +2327,19 @@ async def async_workflow_run_github_app_gidgethub(
                 .strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "output": {
                     "title": request.workflow.name,
-                    "summary": "There are {failure_count} failures, {warning_count} warnings, and {notice_count} notices.",
+                    "summary": f"There are {failure_count} failures, {warning_count} warnings, and {notice_count} notices.",
                     "text": "",
-                    "annotations": [
-                        json.loads(annotation.model_dump_json())
-                        for annotation in annotations
-                    ],
+                    "annotations": list(
+                        itertools.chain(
+                            [
+                                [
+                                    json.loads(annotation.model_dump_json())
+                                    for annotations in annotations[annotation_level]
+                                ]
+                                for annotation_level in annotations
+                            ]
+                        )
+                    ),
                     "images": [
                         {
                             "alt": "Super bananas",
@@ -2311,6 +2371,7 @@ async def async_workflow_run_github_app_gidgethub(
         id="",
         exit_status=PolicyEngineCompleteExitStatuses.SUCCESS,
         outputs={},
+        annotations=request.context["annotations"],
     )
     request_status = PolicyEngineStatus(
         status=PolicyEngineStatuses.COMPLETE,
