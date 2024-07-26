@@ -461,6 +461,37 @@ class PolicyEngineWorkflow(BaseModel, extra="forbid"):
         return data
 
 
+class GitHubWebhookEventSender(BaseModel):
+    login: str
+    webhook_workflow: Optional[Union[str, PolicyEngineWorkflow]] = textwrap.dedent(
+        """
+        name: 'My Cool Status Check'
+        on:
+          push:
+            branches:
+            - main
+
+        jobs:
+          test:
+            runs-on: self-hosted
+            steps:
+            - uses: actions/checkout@v4
+            - run: |
+                echo Hello World
+        """
+    )
+
+
+class GitHubWebhookEventRepository(BaseModel):
+    full_name: str
+
+
+class GitHubWebhookEvent(BaseModel):
+    after: str
+    sender: Optional[GitHubWebhookEventSender]
+    repository: Optional[GitHubWebhookEventRepository]
+
+
 class PolicyEngineRequest(BaseModel, extra="forbid"):
     # Inputs should come from json-ld @context instance
     inputs: Optional[Dict[str, Any]] = Field(default_factory=lambda: {})
@@ -2136,6 +2167,16 @@ cache = cachetools.LRUCache(maxsize=500)
 # @router.register("check_run", action="rerequested")
 
 
+class GitHubCheckSuiteAnnotation(BaseModel):
+    path: str
+    annotation_level: str
+    title: str
+    message: str
+    raw_details: str
+    start_line: int
+    end_line: int
+
+
 async def async_workflow_run_github_app_gidgethub(
     context,
     request,
@@ -2147,6 +2188,7 @@ async def async_workflow_run_github_app_gidgethub(
         event=event["event"],
         delivery_id=event["delivery_id"],
     )
+    event.data = GitHubWebhookEvent.model_validate(event.data)
     async with async_celery_setup_workflow(context, request) as (
         context,
         request,
@@ -2157,7 +2199,7 @@ async def async_workflow_run_github_app_gidgethub(
         # access_token_response["installation"] contains installation info
         installation_jwt = access_token_response["token"]
         started_at = datetime.datetime.now()
-        full_name = event.data["repository"]["full_name"]
+        full_name = event.data.repository.full_name
         # NOTE BUG XXX https://support.github.com/ticket/personal/0/2686424
         # The REST check-run endpoint docs say those routes work with fine
         # grained personal access tokens, but they also say they only work with
@@ -2173,7 +2215,7 @@ async def async_workflow_run_github_app_gidgethub(
             url = f"https://api.github.com/repos/{full_name}/check-runs"
             data = {
                 "name": request.workflow.name,
-                "head_sha": event.data["after"],
+                "head_sha": event.data.after,
                 "status": "in_progress",
                 "external_id": task_id,
                 "started_at": started_at.astimezone(datetime.timezone.utc).strftime(
@@ -2200,6 +2242,23 @@ async def async_workflow_run_github_app_gidgethub(
         )
         check_run_id = check_run_result["id"]
         status = await async_celery_run_workflow(context, request)
+
+        failure_count = 0
+        warning_count = 0
+        notice_count = 0
+        annotations = []
+        annotations.append(
+            GitHubCheckSuiteAnnotation(
+                path="somepath",
+                annotation_level="warning",
+                title="",
+                message="",
+                raw_details="",
+                start_line=0,
+                end_line=0,
+            )
+        )
+
         if hasattr(context.state, "github_app"):
             # GitHub App, use check-runs API
             url = f"https://api.github.com/repos/{full_name}/check-runs/{check_run_id}"
@@ -2214,28 +2273,12 @@ async def async_workflow_run_github_app_gidgethub(
                 .astimezone(datetime.timezone.utc)
                 .strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "output": {
-                    "title": "Mighty Readme report",
-                    "summary": "There are 0 failures, 2 warnings, and 1 notices.",
-                    "text": "You may have some misspelled words on lines 2 and 4. You also may want to add a section in your README about how to install your app.",
+                    "title": request.workflow.name,
+                    "summary": "There are {failure_count} failures, {warning_count} warnings, and {notice_count} notices.",
+                    "text": "",
                     "annotations": [
-                        {
-                            "path": "README.md",
-                            "annotation_level": "warning",
-                            "title": "Spell Checker",
-                            "message": "Check your spelling for '''banaas'''.",
-                            "raw_details": "Do you mean '''bananas''' or '''banana'''?",
-                            "start_line": 2,
-                            "end_line": 2,
-                        },
-                        {
-                            "path": "README.md",
-                            "annotation_level": "warning",
-                            "title": "Spell Checker",
-                            "message": "Check your spelling for '''aples'''",
-                            "raw_details": "Do you mean '''apples''' or '''Naples'''",
-                            "start_line": 4,
-                            "end_line": 4,
-                        },
+                        json.loads(annotation.model_dump_json())
+                        for annotation in annotations
                     ],
                     "images": [
                         {
@@ -2325,6 +2368,7 @@ async def check_suite_requested_triggers_run_workflows(
     gh,
     context,
 ):
+    event.data = GitHubWebhookEvent.model_validate(event.data)
     return str(
         (
             await workflow_run_github_app_gidgethub.asyncio_delay(
@@ -2333,34 +2377,13 @@ async def check_suite_requested_triggers_run_workflows(
                     context={
                         "config": {
                             "env": {
-                                "GITHUB_ACTOR": event.data["sender"]["login"],
-                                "GITHUB_REPOSITORY": event.data["repository"][
-                                    "full_name"
-                                ],
+                                "GITHUB_ACTOR": event.data.sender.login,
+                                "GITHUB_REPOSITORY": event.data.repository.full_name,
                             },
                         },
                     },
                     # TODO workflow router to specify which webhook trigger which workflows
-                    workflow=event.data["sender"].get(
-                        "webhook_workflow",
-                        textwrap.dedent(
-                            """
-                            name: 'My Cool Status Check'
-                            on:
-                              push:
-                                branches:
-                                - main
-
-                            jobs:
-                              test:
-                                runs-on: self-hosted
-                                steps:
-                                - uses: actions/checkout@v4
-                                - run: |
-                                    echo Hello World
-                            """
-                        ),
-                    ),
+                    workflow=event.data.sender.webhook_workflow,
                 ).model_dump_json(),
                 event.__dict__,
             )
