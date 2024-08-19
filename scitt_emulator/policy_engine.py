@@ -2236,11 +2236,15 @@ class GitHubCheckSuiteAnnotation(BaseModel):
     path: str = ""
     annotation_level: str = ""
     title: str = ""
-    # TODO Link out to fix trigger using ad-hoc CVE ID
     message: str = ""
     raw_details: str = ""
     start_line: int = 0
     end_line: int = 0
+
+
+class TriggerAction(BaseModel):
+    triggered: bool
+    markdown_link: str
 
 
 async def async_workflow_run_github_app_gidgethub(
@@ -2312,6 +2316,40 @@ async def async_workflow_run_github_app_gidgethub(
         failure_count = len(request.context["annotations"].get("error", []))
         warning_count = len(request.context["annotations"].get("warning", []))
         notice_count = len(request.context["annotations"].get("notice", []))
+        annotations_flattened = []
+        annotations_trigger_action_links = []
+
+        for annotation_level in request.context["annotations"]:
+            for annotation in request.context["annotations"][annotation_level]:
+                annotations_flattened.append(json.loads(annotation.model_dump_json()))
+                # TODO Lifespan config for trigger actions
+                # TODO Use ad-hoc cve created from annotation to create statement
+                # which we use the URN of as the subject for the next statement
+                # which is the proposed action to take. If there are multiple
+                # potential actions we propose then we add those as well to the
+                # proposed workflow. Downstream jobs can propose further or hook of
+                # new data events, pre-exec flight checks on operating context
+                # should decided if new flows should be added prior to clear for
+                # take off issused.
+                # TODO Use SCITT URN of proposed exec (before clear for take off) to
+                # point to proposed fix (inputs as ad-hoc cve from annotation and
+                # associated fix hypothesized actions to take workflow)
+                ad_hoc_cve_urn = "urn:scitt:........."
+                trigger_action_link = f"https://scitt.example.com/entries/{ad_hoc_cve_urn}"
+                trigger_action_link_markdown = f"[Trigger Action Based Off: {annotation.title}]({trigger_action_link})"
+                annotations_trigger_action_links.append(
+                    TriggerAction(
+                        triggered=False,
+                        markdown_link=trigger_action_link_markdown,
+                    )
+                )
+
+        output_markdown = "\n".join(
+            [
+                f"- [{'x' if trigger_action.triggered else ' '}] {trigger_action.markdown_link}"
+                for trigger_action in annotations_trigger_action_links
+            ]
+        )
 
         if hasattr(context.state, "github_app"):
             # GitHub App, use check-runs API
@@ -2329,18 +2367,8 @@ async def async_workflow_run_github_app_gidgethub(
                 "output": {
                     "title": request.workflow.name,
                     "summary": f"There are {failure_count} failures, {warning_count} warnings, and {notice_count} notices.",
-                    "text": "",
-                    "annotations": list(
-                        itertools.chain(
-                            *[
-                                [
-                                    json.loads(annotation.model_dump_json())
-                                    for annotation in request.context["annotations"][annotation_level]
-                                ]
-                                for annotation_level in request.context["annotations"]
-                            ]
-                        )
-                    ),
+                    "text": output_markdown,
+                    "annotations": annotations_flattened,
                     # "images": [
                     #     {
                     #         "alt": "Super bananas",
