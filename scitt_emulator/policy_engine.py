@@ -1026,6 +1026,7 @@ def step_parse_annotations_github_actions_line(context, step, line):
     line = line.strip().strip("::")
     annotation_level, message = line.split("::", maxsplit=1)
     details = {
+        "title": message,
         "message": message,
         "raw_details": line,
     }
@@ -2235,6 +2236,7 @@ class GitHubCheckSuiteAnnotation(BaseModel):
     path: str = ""
     annotation_level: str = ""
     title: str = ""
+    # TODO Link out to fix trigger using ad-hoc CVE ID
     message: str = ""
     raw_details: str = ""
     start_line: int = 0
@@ -2307,10 +2309,9 @@ async def async_workflow_run_github_app_gidgethub(
         check_run_id = check_run_result["id"]
         status = await async_celery_run_workflow(context, request)
 
-        failure_count = 0
-        warning_count = 0
-        notice_count = 0
-        annotations = []
+        failure_count = len(request.context["annotations"].get("error", []))
+        warning_count = len(request.context["annotations"].get("warning", []))
+        notice_count = len(request.context["annotations"].get("notice", []))
 
         if hasattr(context.state, "github_app"):
             # GitHub App, use check-runs API
@@ -2331,21 +2332,21 @@ async def async_workflow_run_github_app_gidgethub(
                     "text": "",
                     "annotations": list(
                         itertools.chain(
-                            [
+                            *[
                                 [
                                     json.loads(annotation.model_dump_json())
-                                    for annotations in annotations[annotation_level]
+                                    for annotation in request.context["annotations"][annotation_level]
                                 ]
-                                for annotation_level in annotations
+                                for annotation_level in request.context["annotations"]
                             ]
                         )
                     ),
-                    "images": [
-                        {
-                            "alt": "Super bananas",
-                            "image_url": "http://example.com/images/42",
-                        }
-                    ],
+                    # "images": [
+                    #     {
+                    #         "alt": "Super bananas",
+                    #         "image_url": "http://example.com/images/42",
+                    #     }
+                    # ],
                 },
             }
             await context.state.gidgethub.patch(
