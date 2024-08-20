@@ -726,6 +726,10 @@ def download_step_uses_from_url(
     return extracted_path.resolve()
 
 
+class DownloadStepUsesError(Exception):
+    pass
+
+
 def download_step_uses(context, request, step):
     exception = None
     step_uses_org_repo, step_uses_version = step.uses.split("@")
@@ -746,7 +750,7 @@ def download_step_uses(context, request, step):
             )
         except Exception as error:
             exception = error
-    raise exception
+    raise DownloadStepUsesError(step_download_url) from exception
 
 
 def transform_property_accessors(js_code):
