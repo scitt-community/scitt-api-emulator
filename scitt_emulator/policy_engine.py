@@ -1541,6 +1541,13 @@ def policy_engine_context_extra_init_secret_github_token_from_lifespan(
         secrets["GITHUB_TOKEN"] = context.state.github_token
 
 
+@contextlib.asynccontextmanager
+def policy_engine_context_extra_init_fqdn(
+    context, request
+):
+    request.context.setdefault("fqdn", os.environ.get("FQDN", "localhost:8080"))
+
+
 async def gidgethub_get_access_token(context, request):
     # If we have a fine grained personal access token try using that
     if hasattr(context.state, "github_token"):
@@ -2030,6 +2037,7 @@ for callback_key, entrypoint_string in os.environ.items():
 DEFAULT_EXTRA_INITS = [
     policy_engine_context_extra_init_secret_github_token_from_github_app,
     policy_engine_context_extra_init_secret_github_token_from_lifespan,
+    policy_engine_context_extra_init_fqdn,
 ]
 
 def make_default_policy_engine_context():
@@ -2308,7 +2316,7 @@ async def async_workflow_run_github_app_gidgethub(
             data = {
                 "state": "pending",
                 # TODO FQDN from lifespan config
-                "target_url": f"https://example.com/build/status/{task_id}",
+                "target_url": f'http://{request.context["fqdn"]}/request/status/{task_id}',
                 "description": request.workflow.name,
                 "context": f"policy_engine/workflow/{request.workflow.name}",
             }
@@ -2365,7 +2373,11 @@ async def async_workflow_run_github_app_gidgethub(
                     "%Y-%m-%dT%H:%M:%SZ"
                 ),
                 "status": "completed",
-                "conclusion": status.detail.exit_status.value,
+                "conclusion": (
+                    PolicyEngineCompleteExitStatuses.FAILURE.value
+                    if request.context.get("failure_on_error_annotations_present", True) and failure_count
+                    else status.detail.exit_status.value
+                ),
                 "completed_at": datetime.datetime.now()
                 .astimezone(datetime.timezone.utc)
                 .strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -2390,8 +2402,12 @@ async def async_workflow_run_github_app_gidgethub(
             url = f'https://api.github.com/repos/{full_name}/statuses/{event.data.after}'
             data = {
                 # TODO Handle failure
-                "state": "success",
-                "target_url": f"https://example.com/build/status/{task_id}",
+                "state": (
+                    PolicyEngineCompleteExitStatuses.FAILURE.value
+                    if request.context.get("failure_on_error_annotations_present", True) and failure_count
+                    else status.detail.exit_status.value
+                ),
+                "target_url": f'http://{request.context["fqdn"]}/request/status/{task_id}',
                 "description": request.workflow.name[:160],
                 "context": f"policy_engine/workflow/{request.workflow.name}",
             }
