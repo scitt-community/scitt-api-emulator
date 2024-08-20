@@ -252,7 +252,7 @@ from typing import (
     Dict,
     Any,
     Annotated,
-    Self,
+    # Self,
     Iterator,
 )
 
@@ -1618,7 +1618,8 @@ class LifespanCallbackWithConfig(BaseModel):
     callback: Optional[Callable] = Field(exclude=True, default=None)
 
     @model_validator(mode="after")
-    def load_callback_or_set_entrypoint_string(self) -> Self:
+    # def load_callback_or_set_entrypoint_string(self) -> Self:
+    def load_callback_or_set_entrypoint_string(self):
         if self.callback is not None and self.config_string is not None:
             self.entrypoint_string = (
                 f"{make_entrypoint_style_string(self.callback)}"
@@ -2479,7 +2480,12 @@ async def check_suite_requested_triggers_run_workflows(
                     # TODO workflow router to specify which webhook trigger which workflows
                     workflow=event.data.sender.webhook_workflow,
                 ).model_dump_json(),
-                event.__dict__,
+                {
+                    **event.__dict__,
+                    **{
+                        "data": json.loads(event.data.model_dump_json()),
+                    }
+                },
             )
         ).id
     )

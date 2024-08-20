@@ -52,6 +52,7 @@ setup(
             "celery[redis]",
             "fastapi",
             "cachetools",
+            "uvicorn",
             # TODO package deno
         ],
     },
