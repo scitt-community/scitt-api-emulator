@@ -1073,7 +1073,7 @@ def step_io_update_stack_annotations_github_actions(context, request, step):
         stack["annotations"][annotation.annotation_level].append(annotation)
 
 
-def execute_step_uses(context, request, step):
+async def execute_step_uses(context, request, step):
     stack = request.context["stack"][-1]
 
     extracted_path = stack["steps"]["extracted_path"][step.uses]
@@ -1138,7 +1138,7 @@ def execute_step_uses(context, request, step):
         stack = celery_run_workflow_context_stack_make_new(context, request, step.uses)
         # TODO Reusable workflows, populate secrets
         # stack["secrets"] = request.context["secrets"]
-        celery_run_workflow(
+        await no_celery_async_celery_run_workflow(
             context,
             PolicyEngineRequest(
                 inputs=step.with_inputs,
@@ -1157,12 +1157,12 @@ def execute_step_uses(context, request, step):
         raise NotImplementedError("Only node and composite actions implemented")
 
 
-def execute_step_uses_org_repo_at_version(context, request, step):
+async def execute_step_uses_org_repo_at_version(context, request, step):
     download_step_uses(context, request, step)
-    execute_step_uses(context, request, step)
+    await execute_step_uses(context, request, step)
 
 
-def execute_step_run(context, request, step):
+async def execute_step_run(context, request, step):
     stack = request.context["stack"][-1]
     stack["env"].update(step_io_output_github_actions(context, request))
 
@@ -1227,7 +1227,7 @@ def execute_step_run(context, request, step):
         tee_proc.wait()
 
 
-def execute_step(context, request, step):
+async def execute_step(context, request, step):
     stack = request.context["stack"][-1]
 
     if_condition = step.if_condition
@@ -1244,11 +1244,11 @@ def execute_step(context, request, step):
 
     if step.uses:
         if "@" in step.uses:
-            execute_step_uses_org_repo_at_version(context, request, step)
+            await execute_step_uses_org_repo_at_version(context, request, step)
         else:
             raise NotImplementedError("Only uses: org/repo@vXYZ is implemented")
     elif step.run:
-        execute_step_run(context, request, step)
+        await execute_step_run(context, request, step)
     else:
         raise NotImplementedError(
             "Only uses: org/repo@vXYZ and run implemented"
@@ -1769,7 +1769,7 @@ async def async_celery_run_workflow(context, request):
                 stack["env"].update(step_build_inputs(context, request, step))
                 try:
                     # step_index is tuple of (current index, length of steps)
-                    execute_step(context, request, step)
+                    await execute_step(context, request, step)
                 except Exception as step_error:
                     # TODO error like app: and state: in PolicyEngineContext
                     if int(os.environ.get("DEBUG", "0")):
@@ -2303,12 +2303,12 @@ async def async_workflow_run_github_app_gidgethub(
             }
         else:
             # Personal Access Token, use commit status API
-            url = f'https://api.github.com/repos/{full_name}/statuses/{event.data["after"]}'
+            url = f'https://api.github.com/repos/{full_name}/statuses/{event.data.after}'
             data = {
                 "state": "pending",
                 # TODO FQDN from lifespan config
                 "target_url": f"https://example.com/build/status/{task_id}",
-                "description": "TODO description TODO",
+                "description": request.workflow.name,
                 "context": f"policy_engine/workflow/{request.workflow.name}",
             }
         check_run_result = await context.state.gidgethub.post(
@@ -2386,12 +2386,12 @@ async def async_workflow_run_github_app_gidgethub(
             )
         else:
             # Personal Access Token, use commit status API
-            url = f'https://api.github.com/repos/{full_name}/statuses/{event.data["after"]}'
+            url = f'https://api.github.com/repos/{full_name}/statuses/{event.data.after}'
             data = {
                 # TODO Handle failure
                 "state": "success",
                 "target_url": f"https://example.com/build/status/{task_id}",
-                "description": "TODO description TODO",
+                "description": request.workflow.name[:160],
                 "context": f"policy_engine/workflow/{request.workflow.name}",
             }
             await context.state.gidgethub.post(
